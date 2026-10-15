@@ -1,4 +1,4 @@
-# armada-matrix
+# armada-matrix-bridge
 
 A Matrix appservice that bridges [Armada](https://armada.buzz) communities to
 Matrix. Armada runs on [Concord](https://github.com/concord-protocol/concord):

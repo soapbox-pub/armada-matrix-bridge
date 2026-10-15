@@ -28,9 +28,9 @@ Concord library (it expects a checkout at `~/Projects/armada`; run it from that
 directory so its imports resolve):
 
 ```sh
-bun ../armada-matrix/tools/armada-sim/sim.ts create "Bridge Test"   # prints an invite link
-bun ../armada-matrix/tools/armada-sim/sim.ts say general "hi" --as alice
-bun ../armada-matrix/tools/armada-sim/sim.ts tail 20                 # decrypted chat
+bun ../armada-matrix-bridge/tools/armada-sim/sim.ts create "Bridge Test"   # prints an invite link
+bun ../armada-matrix-bridge/tools/armada-sim/sim.ts say general "hi" --as alice
+bun ../armada-matrix-bridge/tools/armada-sim/sim.ts tail 20                 # decrypted chat
 ```
 
 `dev/mx.py` is the Matrix side:
