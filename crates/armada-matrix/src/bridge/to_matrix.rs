@@ -214,8 +214,9 @@ async fn message(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Resu
     for m in &imetas {
         match super::media::download_imeta(&c.b, m).await {
             Ok(att) => {
-                let mxc = c.b.mx.upload(As::user(&ghost), att.bytes.clone(), &att.mime, Some(&att.name)).await?;
-                let mut info = json!({ "mimetype": att.mime, "size": att.bytes.len() });
+                let size = att.bytes.len();
+                let (media_key, media) = c.b.upload_for_room(&ghost, &portal.room_id, att.bytes, &att.mime, &att.name).await?;
+                let mut info = json!({ "mimetype": att.mime, "size": size });
                 if let Some((w, h)) = att.dim {
                     info["w"] = json!(w);
                     info["h"] = json!(h);
@@ -223,13 +224,14 @@ async fn message(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Resu
                 if let Some(d) = att.duration {
                     info["duration"] = json!((d * 1000.0) as u64);
                 }
-                parts.push(json!({
+                let mut part = json!({
                     "msgtype": super::media::msgtype(&att.mime),
                     "body": att.alt.clone().unwrap_or(att.name.clone()),
                     "filename": att.name,
-                    "url": mxc,
                     "info": info,
-                }));
+                });
+                part[media_key] = media;
+                parts.push(part);
             }
             Err(e) => {
                 tracing::debug!(url = %m.url, error = %e, "attachment not bridged");
@@ -241,7 +243,7 @@ async fn message(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Resu
         if let Some(rel) = &relates {
             content["m.relates_to"] = rel.clone();
         }
-        let event_id = c.b.mx.send_ts(As::user(&ghost), &portal.room_id, "m.room.message", &content, opened.ms).await?;
+        let event_id = c.b.send(&ghost, &portal.room_id, "m.room.message", &content, Some(opened.ms)).await?;
         c.b.db
             .insert_message(&portal.room_id, &event_id, &c.id, &portal.channel_id, &rumor.id, i as i32, rumor.kind, opened.author(), "armada", thread_root.as_deref(), expires_at)
             .await?;
@@ -264,7 +266,7 @@ async fn reaction(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Res
     let ghost = ghosts::ready(c, &pk, &portal.room_id).await?;
     let key = reaction_key(&opened.rumor.content);
     let content = json!({ "m.relates_to": { "rel_type": "m.annotation", "event_id": row.event_id, "key": key } });
-    let event_id = c.b.mx.send_ts(As::user(&ghost), &portal.room_id, "m.reaction", &content, opened.ms).await?;
+    let event_id = c.b.send(&ghost, &portal.room_id, "m.reaction", &content, Some(opened.ms)).await?;
     c.b.db.insert_reaction(&portal.room_id, &event_id, &c.id, &opened.rumor.id, target, opened.author(), &key, "armada").await?;
     Ok(())
 }
@@ -296,7 +298,7 @@ async fn edit(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Result<
         content["format"] = json!("org.matrix.custom.html");
         content["formatted_body"] = json!(format!("* {html}"));
     }
-    let event_id = c.b.mx.send_ts(As::user(&ghost), &portal.room_id, "m.room.message", &content, opened.ms).await?;
+    let event_id = c.b.send(&ghost, &portal.room_id, "m.room.message", &content, Some(opened.ms)).await?;
     c.b.db.insert_message(&portal.room_id, &event_id, &c.id, &portal.channel_id, &opened.rumor.id, 0, kinds::EDIT, opened.author(), "armada", None, None).await?;
     Ok(())
 }

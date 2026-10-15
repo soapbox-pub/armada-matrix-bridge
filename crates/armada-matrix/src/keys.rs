@@ -49,6 +49,11 @@ impl KeyRing {
         self.derive_keys(&format!("{PUPPET_LABEL}{mxid}"))
     }
 
+    /// The passphrase for the Matrix crypto stores.
+    pub fn crypto_passphrase(&self) -> String {
+        hex::encode(hkdf(&self.master, b"armada-matrix/crypto-store/v1"))
+    }
+
     pub fn default_bot(&self) -> Keys {
         self.derive_keys(BOT_LABEL)
     }

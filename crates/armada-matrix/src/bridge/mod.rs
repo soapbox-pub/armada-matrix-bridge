@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use nostr::nips::nip19::ToBech32;
 use nostr::prelude::{Event, Filter, Keys, Kind, PublicKey};
 use relay_pool::{Pool, PoolEvent};
@@ -47,6 +47,8 @@ pub struct Bridge {
     rooms: RwLock<HashMap<String, String>>,
     /// Who was typing in each portal room, to send only new typers to Armada.
     typing: tokio::sync::Mutex<HashMap<String, HashSet<String>>>,
+    pub crypto: Option<crate::matrix::e2ee::Crypto>,
+    encrypted_rooms: RwLock<HashSet<String>>,
 }
 
 pub fn now_ms() -> u64 {
@@ -55,6 +57,10 @@ pub fn now_ms() -> u64 {
 
 impl Bridge {
     pub fn new(config: Config, keys: KeyRing, bot: Keys, db: Db, mx: Client, pool: Pool) -> Arc<Bridge> {
+        let crypto = config
+            .encryption
+            .enabled
+            .then(|| crate::matrix::e2ee::Crypto::new(mx.clone(), config.encryption.store_dir.clone(), keys.crypto_passphrase()));
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .user_agent(concat!("armada-matrix/", env!("CARGO_PKG_VERSION")))
@@ -72,6 +78,8 @@ impl Bridge {
             communities: RwLock::default(),
             rooms: RwLock::default(),
             typing: Default::default(),
+            crypto,
+            encrypted_rooms: RwLock::default(),
         })
     }
 
@@ -139,6 +147,46 @@ impl Bridge {
         rx.await.ok()
     }
 
+    pub async fn is_encrypted(&self, room: &str) -> bool {
+        self.encrypted_rooms.read().await.contains(room)
+    }
+
+    pub async fn mark_encrypted(&self, room: &str) {
+        self.encrypted_rooms.write().await.insert(room.to_owned());
+    }
+
+    /// Send an event as a bridge-owned user, encrypting it if the room is.
+    /// Reactions stay in the clear, as clients send them.
+    pub async fn send(&self, sender: &str, room: &str, event_type: &str, content: &Value, ts_ms: Option<u64>) -> Result<String> {
+        let who = As::user(sender);
+        if event_type != "m.reaction"
+            && let Some(crypto) = &self.crypto
+            && self.is_encrypted(room).await
+        {
+            let encrypted = crypto.encrypt(sender, room, event_type, content).await?;
+            return match ts_ms {
+                Some(ts) => self.mx.send_ts(who, room, "m.room.encrypted", &encrypted, ts).await,
+                None => self.mx.send(who, room, "m.room.encrypted", &encrypted).await,
+            };
+        }
+        match ts_ms {
+            Some(ts) => self.mx.send_ts(who, room, event_type, content, ts).await,
+            None => self.mx.send(who, room, event_type, content).await,
+        }
+    }
+
+    /// Upload media for a room: encrypted rooms get an `EncryptedFile` (`file`),
+    /// others a plain `url`. Returns the key and value to put in the content.
+    pub async fn upload_for_room(&self, sender: &str, room: &str, bytes: Vec<u8>, mime: &str, name: &str) -> Result<(&'static str, Value)> {
+        if self.crypto.is_some() && self.is_encrypted(room).await {
+            let (cipher, mut file) = crypto::encrypt_attachment(&bytes);
+            let mxc = self.mx.upload(As::user(sender), cipher, "application/octet-stream", None).await?;
+            file["url"] = json!(mxc);
+            return Ok(("file", file));
+        }
+        Ok(("url", json!(self.mx.upload(As::user(sender), bytes, mime, Some(name)).await?)))
+    }
+
     /// Send a notice as the bot.
     pub async fn notice(&self, room: &str, text: &str) {
         let (body, html, _) = format::armada_to_matrix(text, &|_| None);
@@ -147,7 +195,7 @@ impl Bridge {
             content["format"] = json!("org.matrix.custom.html");
             content["formatted_body"] = json!(html);
         }
-        if let Err(e) = self.mx.send(As::BOT, room, "m.room.message", &content).await {
+        if let Err(e) = self.send(&self.bot_mxid, room, "m.room.message", &content, None).await {
             tracing::warn!(%room, error = %e, "failed to send notice");
         }
     }
@@ -179,6 +227,12 @@ impl Bridge {
         self.pool.subscribe(INBOX_SUB, &self.relays(), vec![inbox]);
 
         let portals = self.db.portals().await?;
+        for p in portals.iter().filter(|p| p.encrypted) {
+            self.mark_encrypted(&p.room_id).await;
+        }
+        if let Some(crypto) = &self.crypto {
+            crypto.machine(&self.bot_mxid).await.context("setting up the bot's encryption device")?;
+        }
         for row in self.db.communities().await? {
             if row.status == "revoked" {
                 continue;
@@ -269,6 +323,9 @@ impl Bridge {
 
     pub async fn run_matrix(self: Arc<Self>, mut rx: mpsc::Receiver<Transaction>) {
         while let Some(txn) = rx.recv().await {
+            if let Some(crypto) = &self.crypto {
+                crypto.receive(&txn).await;
+            }
             for event in txn.events {
                 if let Err(e) = self.matrix_event(event).await {
                     tracing::warn!(error = %e, "failed to handle a Matrix event");
@@ -280,8 +337,31 @@ impl Bridge {
         }
     }
 
-    async fn matrix_event(self: &Arc<Self>, event: Value) -> Result<()> {
+    async fn matrix_event(self: &Arc<Self>, mut event: Value) -> Result<()> {
         let room = event["room_id"].as_str().unwrap_or_default().to_owned();
+        match event["type"].as_str().unwrap_or_default() {
+            "m.room.encryption" => {
+                self.mark_encrypted(&room).await;
+                self.db.set_portal_encrypted(&room).await?;
+            }
+            "m.room.member" => {
+                if let Some(crypto) = &self.crypto {
+                    crypto.invalidate_members(&room).await;
+                }
+            }
+            "m.room.encrypted" if !self.in_namespace(event["sender"].as_str().unwrap_or_default()) => {
+                if let Some(crypto) = &self.crypto {
+                    match crypto.decrypt(&self.bot_mxid, &event).await {
+                        Ok(decrypted) => event = decrypted,
+                        Err(e) => {
+                            tracing::warn!(%room, error = %e, "could not decrypt an event");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
         let sender = event["sender"].as_str().unwrap_or_default().to_owned();
         let kind = event["type"].as_str().unwrap_or_default();
 
@@ -289,6 +369,9 @@ impl Bridge {
         if kind == "m.room.member" && event["state_key"].as_str() == Some(self.bot_mxid.as_str()) && event["content"]["membership"] == "invite" {
             if self.permission(&sender) >= Permission::User {
                 self.mx.join(&self.bot_mxid, &room).await?;
+                if self.mx.get_state(As::BOT, &room, "m.room.encryption", "").await.ok().flatten().is_some() {
+                    self.mark_encrypted(&room).await;
+                }
                 if event["content"]["is_direct"].as_bool() == Some(true) || self.community_of_room(&room).await.is_none() {
                     self.db.set_management_room(&room, &sender).await?;
                     self.notice(&room, &commands::welcome(self)).await;

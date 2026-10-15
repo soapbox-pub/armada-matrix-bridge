@@ -118,6 +118,9 @@ async fn create_portal(c: &mut Community, space: &str, ch: &ChannelView, index: 
         .await?;
     c.b.mx.set_state(As::BOT, space, "m.space.child", &room, &json!({ "via": [c.b.config.homeserver.server_name], "order": child_order(ch, index) })).await?;
     c.b.db.insert_portal(&c.id, &ch.id_hex, &room, encrypted, &ch.name).await?;
+    if encrypted {
+        c.b.mark_encrypted(&room).await;
+    }
     c.b.db.set_room_member(&room, &c.b.bot_mxid, true).await?;
     c.b.register_room(&room, &c.id).await;
     if c.requested_by.starts_with('@') {

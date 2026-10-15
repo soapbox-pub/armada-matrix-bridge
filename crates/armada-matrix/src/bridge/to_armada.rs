@@ -82,7 +82,7 @@ pub async fn handle(c: &mut Community, event: Value) -> Result<()> {
         "m.room.message" | "m.sticker" => message(c, &portal, &sender, &event).await,
         "m.reaction" => reaction(c, &portal, &sender, &event).await,
         "m.room.redaction" => redaction(c, &portal, &sender, &event).await,
-        "m.room.encrypted" => {
+        "m.room.encrypted" if c.b.crypto.is_none() => {
             if c.seen.put(format!("encrypted:{room}"), ()).is_none() {
                 c.b.notice(&room, "This room is encrypted, but end-to-end encryption isn't enabled on this bridge, so messages here can't reach Armada.").await;
             }
