@@ -124,6 +124,7 @@ pub struct Community {
     pub status: Status,
     pub approval_code: Option<String>,
     pub requested_by: String,
+    pub approved_by: Option<String>,
     pub management_room: Option<String>,
     pub space: Option<String>,
     pub folded: FoldedControl,
@@ -531,7 +532,12 @@ impl Community {
                     s.push_str(&format!(", waiting for an Armada admin to post `/bridge approve {code}`"));
                 }
             }
-            Status::Active => s.push_str(&format!(", bridging {}", if bridged.is_empty() { "no channels".into() } else { bridged.join(", ") })),
+            Status::Active => {
+                s.push_str(&format!(", bridging {}", if bridged.is_empty() { "no channels".into() } else { bridged.join(", ") }));
+                if let Some(by) = self.approved_by.as_deref().and_then(|pk| PublicKey::from_hex(pk).ok()) {
+                    s.push_str(&format!(" (approved by nostr:{})", nostr::nips::nip19::ToBech32::to_bech32(&by).unwrap_or_default()));
+                }
+            }
             Status::Revoked => {}
         }
         s
@@ -625,6 +631,7 @@ fn new_community(b: Arc<Bridge>, row: &CommunityRow, m: Membership) -> Community
         status: Status::parse(&row.status),
         approval_code: row.approval_code.clone(),
         requested_by: row.requested_by.clone(),
+        approved_by: row.approved_by.clone(),
         management_room: row.management_room.clone(),
         space: row.space_room_id.clone(),
         folded: FoldedControl::default(),

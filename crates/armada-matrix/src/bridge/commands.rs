@@ -153,6 +153,7 @@ pub async fn armada(c: &mut Community, opened: &Opened, channel_id: &str) -> Res
             (Status::Active, _) => "The bridge is already approved.".into(),
             (Status::Pending, Some(code)) if code.eq_ignore_ascii_case(arg) => {
                 c.status = Status::Active;
+                c.approved_by = Some(author.clone());
                 c.b.db.set_status(&c.id, "active", Some(&author)).await?;
                 Box::pin(super::portals::reconcile(c)).await?;
                 if let Some(room) = &c.management_room {

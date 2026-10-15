@@ -30,7 +30,6 @@ pub struct Client {
     http: reqwest::Client,
     base: String,
     as_token: String,
-    pub server_name: String,
 }
 
 pub fn enc(s: &str) -> String {
@@ -53,13 +52,13 @@ impl<'a> As<'a> {
 }
 
 impl Client {
-    pub fn new(base: &str, as_token: &str, server_name: &str) -> Self {
+    pub fn new(base: &str, as_token: &str) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .user_agent(concat!("armada-matrix/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client");
-        Client { http, base: base.to_owned(), as_token: as_token.to_owned(), server_name: server_name.to_owned() }
+        Client { http, base: base.to_owned(), as_token: as_token.to_owned() }
     }
 
     fn builder(&self, method: Method, path: &str, who: As) -> reqwest::RequestBuilder {
@@ -187,15 +186,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn ban(&self, who: As<'_>, room: &str, user: &str, reason: &str) -> Result<()> {
-        self.post(&format!("/_matrix/client/v3/rooms/{}/ban", enc(room)), who, &json!({ "user_id": user, "reason": reason })).await?;
-        Ok(())
-    }
 
-    pub async fn unban(&self, who: As<'_>, room: &str, user: &str) -> Result<()> {
-        self.post(&format!("/_matrix/client/v3/rooms/{}/unban", enc(room)), who, &json!({ "user_id": user })).await?;
-        Ok(())
-    }
 
     pub async fn send(&self, who: As<'_>, room: &str, event_type: &str, content: &Value) -> Result<String> {
         let txn = hex::encode(rand::random::<[u8; 16]>());
@@ -238,10 +229,6 @@ impl Client {
         }
     }
 
-    pub async fn joined_members(&self, room: &str) -> Result<Vec<String>> {
-        let res = self.get(&format!("/_matrix/client/v3/rooms/{}/joined_members", enc(room)), As::BOT).await?;
-        Ok(res.get("joined").and_then(Value::as_object).map(|o| o.keys().cloned().collect()).unwrap_or_default())
-    }
 
     pub async fn typing(&self, user: &str, room: &str, typing: bool) -> Result<()> {
         let body = if typing { json!({ "typing": true, "timeout": 8000 }) } else { json!({ "typing": false }) };
@@ -287,9 +274,6 @@ impl Client {
         Ok(())
     }
 
-    pub async fn whoami(&self, who: As<'_>) -> Result<Value> {
-        self.get("/_matrix/client/v3/account/whoami", who).await
-    }
 }
 
 /// Read a response body, refusing more than `max` bytes even if Content-Length lied.

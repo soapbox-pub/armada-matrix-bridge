@@ -115,10 +115,6 @@ impl Bridge {
         self.rooms.write().await.insert(room.to_owned(), cid.to_owned());
     }
 
-    pub async fn unregister_room(&self, room: &str) {
-        self.rooms.write().await.remove(room);
-    }
-
     pub async fn community_of_room(&self, room: &str) -> Option<String> {
         self.rooms.read().await.get(room).cloned()
     }

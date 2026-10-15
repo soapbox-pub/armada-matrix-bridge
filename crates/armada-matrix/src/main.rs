@@ -77,7 +77,7 @@ async fn run(config: Config, keyring: keys::KeyRing) -> Result<()> {
     let registration = Registration::load(&config.appservice.registration)?;
     let bot = bot_keys(&config, &keyring)?;
     let db = db::Db::connect(&config.database.url, config.database.max_connections, keyring.clone()).await.context("connecting to Postgres")?;
-    let mx = matrix::Client::new(&config.homeserver.url, &registration.as_token, &config.homeserver.server_name);
+    let mx = matrix::Client::new(&config.homeserver.url, &registration.as_token);
     let (pool, pool_rx) = relay_pool::Pool::new(bot.clone());
     let bind = config.appservice.bind.clone();
     let b = bridge::Bridge::new(config, keyring, bot, db, mx, pool);

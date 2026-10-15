@@ -16,7 +16,6 @@ use tokio::sync::mpsc;
 /// One transaction, split by what the bridge does with each part.
 #[derive(Debug, Default)]
 pub struct Transaction {
-    pub id: String,
     pub events: Vec<Value>,
     pub ephemeral: Vec<Value>,
     pub to_device: Vec<Value>,
@@ -71,7 +70,6 @@ async fn transaction(
         return Json(json!({})).into_response();
     }
     let txn = Transaction {
-        id: txn_id,
         events: array(&body, &["events"]),
         ephemeral: array(&body, &["ephemeral", "de.sorunome.msc2409.ephemeral"]),
         to_device: array(&body, &["to_device", "de.sorunome.msc2409.to_device"]),

@@ -74,9 +74,6 @@ pub struct Bridge {
     pub blossom_servers: Vec<String>,
     #[serde(default = "default_prefix")]
     pub command_prefix: String,
-    /// The base used for links to Armada in notices.
-    #[serde(default = "default_armada_web")]
-    pub armada_web: String,
     /// Suffix appended to Matrix users' display names on Armada.
     #[serde(default = "default_puppet_suffix")]
     pub puppet_name_suffix: String,
@@ -155,9 +152,6 @@ fn default_blossom() -> Vec<String> {
 }
 fn default_prefix() -> String {
     "!armada".into()
-}
-fn default_armada_web() -> String {
-    "https://armada.buzz".into()
 }
 fn default_puppet_suffix() -> String {
     " (Matrix)".into()

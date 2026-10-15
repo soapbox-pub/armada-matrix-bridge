@@ -1,0 +1,19 @@
+[Unit]
+Description=Armada <-> Matrix bridge
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=armada-matrix
+WorkingDirectory=/var/lib/armada-matrix
+ExecStart=/usr/local/bin/armada-matrix -c /var/lib/armada-matrix/config.toml
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/armada-matrix
+
+[Install]
+WantedBy=multi-user.target

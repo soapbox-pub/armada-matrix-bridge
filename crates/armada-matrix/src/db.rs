@@ -41,6 +41,8 @@ pub struct PortalRow {
     pub name: String,
 }
 
+// Rows mirror their tables whole, read or not.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct MessageRow {
     pub room_id: String,
@@ -56,6 +58,7 @@ pub struct MessageRow {
     pub expires_at: Option<i64>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ReactionRow {
     pub room_id: String,

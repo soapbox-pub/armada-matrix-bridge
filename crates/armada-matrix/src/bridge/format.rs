@@ -106,10 +106,8 @@ pub fn matrix_to_armada(body: &str, html: Option<&str>, is_reply: bool, resolve:
             let html = replace_pills(&html, resolve, &mut mentioned);
             htmd::convert(&html).unwrap_or_else(|_| body.to_owned())
         }
-        None => {
-            let body = if is_reply { strip_reply_fallback(body) } else { body.to_owned() };
-            body
-        }
+        None if is_reply => strip_reply_fallback(body),
+        None => body.to_owned(),
     };
     (text.trim().to_owned(), mentioned)
 }

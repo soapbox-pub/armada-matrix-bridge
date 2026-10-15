@@ -1,0 +1,65 @@
+# armada-matrix configuration. Copy to config.toml and edit.
+
+[homeserver]
+# How the bridge reaches your homeserver's client-server API.
+url = "https://matrix.example.com"
+server_name = "example.com"
+
+[appservice]
+# How the homeserver reaches the bridge.
+url = "http://127.0.0.1:8789"
+bind = "127.0.0.1:8789"
+# id = "armada"
+# bot_localpart = "armadabot"
+# bot_displayname = "Armada bridge"
+# bot_avatar = "mxc://example.com/abc"
+# Armada members appear as @<ghost_prefix><npub>:server.
+# ghost_prefix = "armada_"
+# Written by `armada-matrix generate-registration`; relative to this file.
+# registration = "registration.yaml"
+
+[database]
+url = "postgres://armada:password@127.0.0.1/armada_matrix"
+# max_connections = 10
+
+[bridge]
+# 64 hex characters (`openssl rand -hex 32`). Every Matrix user's Armada key and
+# the key sealing community secrets at rest derive from it. Back it up: losing
+# it loses those identities and the stored community keys.
+master_secret = "REPLACE-ME"
+# The bridge's own Armada identity (nsec or hex). Derived from master_secret
+# when unset; `armada-matrix whoami` prints it.
+# nostr_key = "nsec1..."
+# Relays for profiles and the bot's inbox (Direct Invites). Community traffic
+# always uses each community's own relays.
+# relays = ["wss://relay.ditto.pub", "wss://relay.primal.net", "wss://relay.damus.io"]
+# Where Matrix users' attachments and avatars are uploaded for Armada.
+# blossom_servers = ["https://blossom.ditto.pub", "https://blossom.primal.net"]
+# command_prefix = "!armada"
+# puppet_name_suffix = " (Matrix)"
+# ghost_name_suffix = " (Armada)"
+# max_media_bytes = 52428800
+# Messages copied into a newly bridged channel.
+# backfill_messages = 50
+
+[encryption]
+# End-to-end encrypted Matrix rooms. Needs, in Synapse's homeserver.yaml:
+#   experimental_features:
+#     msc2409_to_device_messages_enabled: true
+#     msc3202_transaction_extensions: true
+#     msc4190_enabled: true
+# enabled = false
+# Create portal rooms encrypted.
+# default = false
+# store_dir = "crypto"
+
+# Who may use the bridge: an MXID, a server name, or "*". Levels:
+#   none  - messages are not bridged
+#   user  - messages are bridged under the user's own Armada identity
+#   admin - may also bridge and unbridge communities
+[permissions]
+"example.com" = "user"
+"@you:example.com" = "admin"
+
+# [logging]
+# filter = "info,armada_matrix=debug"
