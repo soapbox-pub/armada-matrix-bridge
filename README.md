@@ -100,7 +100,7 @@ there.
 
 ## Setup
 
-You need Synapse 1.13x or newer and PostgreSQL. Encryption also needs the
+You need a recent Synapse and PostgreSQL. Encryption also needs the
 Synapse experimental features listed below.
 
 ```sh
