@@ -1,0 +1,19 @@
+[package]
+name = "concord"
+version = "0.1.0"
+description = "Sans-IO implementation of the Concord protocol (CORD-01..08) as spoken by Armada"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+base64.workspace = true
+hex.workspace = true
+hkdf.workspace = true
+nostr.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
