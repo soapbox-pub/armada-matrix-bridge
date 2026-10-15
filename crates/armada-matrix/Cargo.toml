@@ -1,0 +1,37 @@
+[package]
+name = "armada-matrix"
+version = "0.1.0"
+description = "A Matrix appservice bridging Armada (Concord) communities to Matrix spaces"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aes = "0.8"
+aes-gcm.workspace = true
+anyhow = "1"
+axum = "0.8"
+base64.workspace = true
+clap = { version = "4", features = ["derive"] }
+concord = { path = "../concord" }
+ctr = "0.9"
+hex.workspace = true
+hkdf.workspace = true
+htmd = "0.5"
+lru = "0.18"
+nostr.workspace = true
+percent-encoding = "2"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+rand.workspace = true
+relay-pool = { path = "../relay-pool" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "migrate", "json", "macros"] }
+thiserror.workspace = true
+tokio = { version = "1", features = ["full"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"

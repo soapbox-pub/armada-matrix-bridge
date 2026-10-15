@@ -1,0 +1,20 @@
+[package]
+name = "relay-pool"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Nostr relay pool with multi-key NIP-42 authentication"
+
+[dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+nostr.workspace = true
+rand.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
+tokio-tungstenite = { version = "0.30", features = ["connect", "rustls-tls-webpki-roots"] }
+tracing = "0.1"
+webpki-roots = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
