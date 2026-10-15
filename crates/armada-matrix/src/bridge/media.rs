@@ -87,7 +87,10 @@ pub async fn download_imeta(b: &Bridge, imeta: &Imeta) -> Result<Attachment> {
         bail!("decrypted attachment does not match its hash");
     }
     let mime = imeta.mime.clone().or(served_mime.filter(|_| imeta.encryption.is_none())).unwrap_or_else(|| "application/octet-stream".into());
-    let name = imeta.url.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("file").to_owned();
+    // Blossom URLs are hashes; name the file from its type instead.
+    let (kind, ext) = mime.split_once('/').unwrap_or(("file", "bin"));
+    let ext = ext.split(['+', ';']).next().unwrap_or("bin").replace("jpeg", "jpg");
+    let name = format!("{}.{ext}", if kind == "application" { "file" } else { kind });
     Ok(Attachment { bytes, mime, name, dim: imeta.dim, duration: imeta.duration, alt: imeta.alt.clone() })
 }
 

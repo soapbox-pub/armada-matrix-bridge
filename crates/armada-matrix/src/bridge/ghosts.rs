@@ -86,11 +86,8 @@ pub async fn ensure_in_room(b: &Bridge, mxid: &str, room: &str) -> Result<()> {
     if b.db.is_room_member(room, mxid).await? {
         return Ok(());
     }
-    if let Err(e) = b.mx.join(mxid, room).await {
-        tracing::debug!(%mxid, %room, error = %e, "direct join failed; inviting");
-        b.mx.invite(As::BOT, room, mxid).await?;
-        b.mx.join(mxid, room).await?;
-    }
+    b.mx.invite(As::BOT, room, mxid).await?;
+    b.mx.join(mxid, room).await?;
     b.db.set_room_member(room, mxid, true).await?;
     Ok(())
 }

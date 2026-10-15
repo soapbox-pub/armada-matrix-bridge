@@ -58,6 +58,9 @@ pub fn expiration_for(kind: u16, ms: u64, timer_secs: Option<u64>) -> Option<u64
 }
 
 fn finish(kind: u16, content: String, mut tags: Vec<Vec<String>>, author: &str, ms: u64, expiration: Option<u64>) -> Rumor {
+    // A quoted author is often also mentioned; one `p` each is enough.
+    let mut seen = std::collections::HashSet::new();
+    tags.retain(|t| t.first().map(String::as_str) != Some("p") || seen.insert(t.get(1).cloned()));
     if let Some(exp) = expiration {
         tags.push(tag(["expiration", &exp.to_string()]));
     }

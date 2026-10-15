@@ -13,8 +13,9 @@ use crate::db::PortalRow;
 use crate::matrix::As;
 
 fn power_levels(c: &Community) -> Value {
+    // The bot creates every room, so it is the creator: room v12 forbids listing
+    // creators here, and older versions give them 100 anyway.
     let mut users = serde_json::Map::new();
-    users.insert(c.b.bot_mxid.clone(), json!(100));
     if c.requested_by.starts_with('@') {
         users.insert(c.requested_by.clone(), json!(100));
     }

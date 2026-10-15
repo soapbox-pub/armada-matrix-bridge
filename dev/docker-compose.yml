@@ -1,0 +1,27 @@
+# Throwaway Synapse + Postgres for local testing. Both use host networking so
+# Synapse reaches the bridge (run with `cargo run`) on 127.0.0.1 without any
+# firewall rule. See dev/README.md.
+services:
+  postgres:
+    image: postgres:16-alpine
+    network_mode: host
+    environment:
+      POSTGRES_DB: armada_matrix
+      POSTGRES_USER: armada
+      POSTGRES_PASSWORD: armada
+      PGPORT: "5436"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    network_mode: host
+    environment:
+      UID: "1000"
+      GID: "1000"
+    volumes:
+      - ./synapse:/data
+      - ../registration.yaml:/data/armada-registration.yaml:ro
+
+volumes:
+  pgdata:

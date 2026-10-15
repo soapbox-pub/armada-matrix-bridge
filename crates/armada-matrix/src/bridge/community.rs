@@ -583,7 +583,13 @@ impl Community {
                     let _ = reply.send(self.command(cmd).await);
                     Ok(())
                 }
-                Msg::Tick => super::to_matrix::expire(&mut self).await,
+                Msg::Tick => {
+                    // Also heals a reconcile that failed partway (e.g. a homeserver error).
+                    if self.status == Status::Active && let Err(e) = super::portals::reconcile(&mut self).await {
+                        tracing::warn!(community = %self.id, error = %format!("{e:#}"), "reconcile failed");
+                    }
+                    super::to_matrix::expire(&mut self).await
+                }
             };
             if let Err(e) = res {
                 tracing::warn!(community = %self.id, error = %format!("{e:#}"), "community task error");
@@ -653,6 +659,11 @@ pub async fn spawn(b: Arc<Bridge>, row: CommunityRow, m: Membership, portals: Ve
         tracing::error!(community = %c.id, error = %e, "failed to load community");
     }
     c.subscribe();
+    if c.status == Status::Active
+        && let Err(e) = super::portals::reconcile(&mut c).await
+    {
+        tracing::warn!(community = %c.id, error = %format!("{e:#}"), "reconcile failed");
+    }
     let (tx, rx) = mpsc::unbounded_channel();
     b.insert_handle(&c.id, CommunityHandle { id: c.id.clone(), tx }).await;
     tracing::info!(community = %c.id, name = %c.name(), status = c.status.as_str(), "community loaded");

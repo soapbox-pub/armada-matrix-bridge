@@ -1,1 +1,7 @@
 /target
+/registration.yaml
+/config.dev.toml
+/config.toml
+/crypto
+/dev/synapse
+/tools/armada-sim/state.json
