@@ -34,6 +34,14 @@ fn open_chat(c: &Community, route: &StreamRoute, event: &Event) -> Option<Opened
 }
 
 pub async fn handle(c: &mut Community, event: Event) -> Result<()> {
+    handle_inner(c, event, false).await
+}
+
+/// Commands only run live: never from backfill, and never once stale (a
+/// restart replays a little history).
+const COMMAND_MAX_AGE_SECS: u64 = 600;
+
+async fn handle_inner(c: &mut Community, event: Event, backfill: bool) -> Result<()> {
     let Some(route) = c.routes.get(&event.pubkey.to_hex()).cloned() else { return Ok(()) };
     if c.seen.put(event.id.to_hex(), ()).is_some() {
         return Ok(());
@@ -43,6 +51,9 @@ pub async fn handle(c: &mut Community, event: Event) -> Result<()> {
         return Ok(());
     }
     if super::commands::is_armada_command(&opened.rumor) {
+        if backfill || opened.rumor.created_at + COMMAND_MAX_AGE_SECS < now_ms() / 1000 {
+            return Ok(());
+        }
         return super::commands::armada(c, &opened, &route.channel_id).await;
     }
     if c.status != super::community::Status::Active {
@@ -384,7 +395,7 @@ pub async fn backfill(c: &mut Community, channel_id: &str) -> Result<()> {
         }
     }
     for event in events.into_iter().skip(keep_from) {
-        if let Err(e) = handle(c, event).await {
+        if let Err(e) = handle_inner(c, event, true).await {
             tracing::debug!(error = %e, "backfill event failed");
         }
     }
