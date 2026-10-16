@@ -34,6 +34,17 @@ enum Cmd {
     },
     /// Print the bridge's Armada identity.
     Whoami,
+    /// List every community the running bridge knows.
+    List,
+    /// Show one community's state.
+    Status {
+        /// The start of its id, or its name.
+        community: String,
+    },
+    /// Invite a Matrix user into a community's space.
+    Invite { community: String, mxid: String },
+    /// Stop bridging a community and leave it.
+    Unbridge { community: String },
 }
 
 fn bot_keys(config: &Config, keys: &keys::KeyRing) -> Result<nostr::prelude::Keys> {
@@ -69,7 +80,45 @@ async fn main() -> Result<()> {
             println!("{}", bot_keys(&config, &keyring)?.public_key().to_bech32()?);
             Ok(())
         }
+        Cmd::List => control(&config, "list").await,
+        Cmd::Status { community } => control(&config, &format!("status {community}")).await,
+        Cmd::Invite { community, mxid } => control(&config, &format!("invite {community} {mxid}")).await,
+        Cmd::Unbridge { community } => control(&config, &format!("unbridge {community}")).await,
         Cmd::Run => run(config, keyring).await,
+    }
+}
+
+/// Send one command to the running bridge over its control socket.
+async fn control(config: &Config, line: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let path = &config.bridge.control_socket;
+    let mut stream = tokio::net::UnixStream::connect(path).await.with_context(|| format!("connecting to {} (is the bridge running?)", path.display()))?;
+    stream.write_all(format!("{line}\n").as_bytes()).await?;
+    stream.shutdown().await?;
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).await?;
+    println!("{}", reply.trim_end());
+    Ok(())
+}
+
+async fn serve_control(b: std::sync::Arc<bridge::Bridge>) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    let path = b.config.bridge.control_socket.clone();
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let b = b.clone();
+        tokio::spawn(async move {
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            if BufReader::new(read.take(4096)).read_line(&mut line).await.is_ok() {
+                let reply = bridge::commands::operator(b, &line).await;
+                let _ = write.write_all(format!("{reply}\n").as_bytes()).await;
+            }
+        });
     }
 }
 
@@ -98,6 +147,12 @@ async fn run(config: Config, keyring: keys::KeyRing) -> Result<()> {
         tracing::warn!(error = %e, "the homeserver couldn't reach the appservice (check `url` in the registration)");
     }
     b.start().await?;
+    let control = b.clone();
+    tokio::spawn(async move {
+        if let Err(e) = serve_control(control).await {
+            tracing::error!(error = %format!("{e:#}"), "control socket stopped");
+        }
+    });
     tokio::spawn(b.clone().run_nostr(pool_rx));
     tokio::spawn(b.clone().run_ticks());
     tokio::select! {

@@ -14,7 +14,7 @@ as a member and mirrors it into a Matrix space.
     derived from their MXID, so it's stable without being stored.
   - No messages arrive as "the bridge says X said Y".
 - **Both sides must agree.**
-  - A Matrix bridge admin starts a bridge with an invite link.
+  - Any Matrix user with an invite link can start a bridge.
   - Nothing crosses until someone in the Armada community who can manage
     channels approves it there.
   - Armada admins can scope or revoke the bridge at any time.
@@ -50,10 +50,12 @@ else's message only hides it on Matrix.
 Concord communities are end-to-end encrypted. Bridging copies their messages
 onto a Matrix homeserver, so:
 
-- **Approval happens on Armada.** `!armada bridge <invite>` only joins the
-  community and shows an approval code. Nothing is relayed in either direction
-  until a member holding **Manage channels** (or the owner) posts
-  `/bridge approve <code>` in one of its channels.
+- **Approval happens on Armada.** Any Matrix user with an invite link can ask
+  to bridge a community. `bridge <invite>` only joins the community and shows
+  an approval code. Nothing is relayed in either direction until a member
+  holding **Manage channels** (or the owner) posts `/bridge approve <code>` in
+  one of its channels. Requests nobody approves within 7 days are dropped, and
+  each Matrix user may have 3 waiting at once.
 - **Private channels are opt-in.** Public channels are bridged after approval.
   A private channel is bridged only when an Armada admin runs `/bridge include`
   inside it. Its room topic warns that everyone in the room can read it.
@@ -90,13 +92,32 @@ there.
 
 | Command | Who | Effect |
 |---|---|---|
-| `bridge <invite link>` | admin | Join a community and wait for Armada-side approval |
-| `list` | user | Communities the bridge knows |
-| `status <community>` | user | One community's state |
-| `invite <community> <@user:server>` | admin | Invite someone into its space |
-| `unbridge <community>` | admin | Stop bridging and leave the community |
+| `bridge <invite link>` | Anyone | Ask to bridge a community, or join its space if it is already bridged |
+| `list` | Anyone | Bridged communities whose space you're in |
+| `status <community>` | Space members | One community's state |
+| `invite <community> <@user:server>` | Space members | Invite someone into its space |
+| `unbridge <community>` | Managers | Stop bridging and leave the community |
 
-`<community>` is the start of its id or its name.
+`<community>` is the start of its id or its name. A community's **managers**
+are whoever bridged it and anyone with power level 100 in its space. Other
+people's communities are invisible: commands answer "No such community".
+
+"Anyone" means anyone allowed by `[permissions]`, which also decides whose
+messages are bridged at all. Users given `admin` there manage every community
+from Matrix; most deployments need none.
+
+## Operator commands
+
+The bridge needs no Matrix admin account. Whoever runs it manages every
+community from the host, over a Unix socket (`control_socket`, only usable by
+the bridge's user and root):
+
+```sh
+armada-matrix-bridge -c config.toml list        # every community, with who requested it
+armada-matrix-bridge -c config.toml status <community>
+armada-matrix-bridge -c config.toml invite <community> @user:server
+armada-matrix-bridge -c config.toml unbridge <community>
+```
 
 ## Setup
 
@@ -105,7 +126,7 @@ Synapse experimental features listed below.
 
 ```sh
 cargo build --release
-cp config.example.toml config.toml    # edit: homeserver, database, master_secret, permissions
+cp config.example.toml config.toml    # edit: homeserver, database, master_secret
 ./target/release/armada-matrix-bridge -c config.toml generate-registration
 ```
 

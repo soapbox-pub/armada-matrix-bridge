@@ -313,7 +313,7 @@ impl Bridge {
         if let Some(handle) = self.handle(&cid).await {
             let _ = handle.tx.send(Msg::DirectInvite(Box::new(invite)));
         } else {
-            tracing::info!(community = %cid, inviter = %invite.inviter, name = %invite.bundle.name, "Direct Invite to an unbridged community; a Matrix admin can bridge it with an invite link");
+            tracing::info!(community = %cid, inviter = %invite.inviter, name = %invite.bundle.name, "Direct Invite to an unbridged community; a Matrix user can bridge it with an invite link");
         }
     }
 
@@ -424,6 +424,7 @@ impl Bridge {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
+            commands::expire_pending(&self).await;
             for handle in self.handles().await {
                 let _ = handle.tx.send(Msg::Tick);
             }

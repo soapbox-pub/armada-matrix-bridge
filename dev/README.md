@@ -8,7 +8,7 @@ cp config.example.toml config.dev.toml       # then point it at the stack below:
 #   homeserver.url = "http://127.0.0.1:8008", server_name = "localhost"
 #   appservice.url = "http://127.0.0.1:8789"
 #   database.url   = "postgres://armada:armada@127.0.0.1:5436/armada_matrix_bridge"
-#   permissions    = { "localhost" = "admin" }
+#   permissions    = { "localhost" = "user" }
 cargo run -- -c config.dev.toml generate-registration && chmod 644 registration.yaml
 
 docker run --rm -v "$PWD/dev/synapse:/data" -e SYNAPSE_SERVER_NAME=localhost \

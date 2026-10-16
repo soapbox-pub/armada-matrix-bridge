@@ -86,6 +86,10 @@ pub struct Bridge {
     /// How far back to backfill a newly bridged channel.
     #[serde(default = "default_backfill")]
     pub backfill_messages: usize,
+    /// Unix socket the `list`/`status`/`invite`/`unbridge` subcommands use to
+    /// reach the running bridge. Only its owner (and root) can connect.
+    #[serde(default = "default_control_socket")]
+    pub control_socket: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -117,9 +121,10 @@ impl Default for Logging {
 pub enum Permission {
     /// Messages are not bridged.
     None,
-    /// Messages are bridged under the user's own Armada puppet.
+    /// Messages are bridged under the user's own Armada puppet, and the user may
+    /// bridge communities and manage the ones they bridged.
     User,
-    /// May bridge and unbridge communities.
+    /// May also manage every community from Matrix.
     Admin,
 }
 
@@ -165,6 +170,9 @@ fn default_max_media() -> u64 {
 fn default_backfill() -> usize {
     50
 }
+fn default_control_socket() -> PathBuf {
+    "control.sock".into()
+}
 fn default_crypto_dir() -> PathBuf {
     "crypto".into()
 }
@@ -180,10 +188,12 @@ impl Config {
             bail!("bridge.master_secret must be 64 hex characters (generate one with `openssl rand -hex 32`)");
         }
         config.homeserver.url = config.homeserver.url.trim_end_matches('/').to_owned();
-        if config.appservice.registration.is_relative()
-            && let Some(dir) = path.parent()
-        {
-            config.appservice.registration = dir.join(&config.appservice.registration);
+        if let Some(dir) = path.parent() {
+            for p in [&mut config.appservice.registration, &mut config.bridge.control_socket] {
+                if p.is_relative() {
+                    *p = dir.join(&*p);
+                }
+            }
         }
         Ok(config)
     }

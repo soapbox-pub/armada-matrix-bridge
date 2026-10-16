@@ -65,6 +65,8 @@ pub enum Command {
     Unbridge { by: String },
     /// Invite a Matrix user into the community's space.
     Invite { mxid: String },
+    /// Give up on a request nobody approved: leave the community and stop.
+    Expire,
 }
 
 pub enum Msg {
@@ -560,6 +562,22 @@ impl Community {
                 },
                 None => "This community has no Matrix space yet (it isn't approved).".into(),
             },
+            Command::Expire => {
+                if let Some(room) = &self.management_room {
+                    let note = format!(
+                        "Nobody approved bridging **{}** on Armada within {} days, so I left it. Send the invite link again to retry.",
+                        self.name(),
+                        super::commands::PENDING_DAYS
+                    );
+                    self.b.notice(room, &note).await;
+                }
+                let leave = concord::guestbook::leave(&self.b.bot_hex(), now_ms());
+                let _ = self.publish(&leave, Plane::Guestbook, &self.m.current_guestbook_stream(), &self.b.bot, WrapOptions::default()).await;
+                for plane in [PlaneSub::Control, PlaneSub::Guestbook, PlaneSub::Rekey, PlaneSub::Chat, PlaneSub::Live, PlaneSub::Dissolved] {
+                    self.b.pool.unsubscribe(&format!("{}:{}", self.id, plane.name()));
+                }
+                String::new()
+            }
         }
     }
 
@@ -586,7 +604,11 @@ impl Community {
                     Ok(())
                 }
                 Msg::Command(cmd, reply) => {
+                    let stop = matches!(cmd, Command::Expire);
                     let _ = reply.send(self.command(cmd).await);
+                    if stop {
+                        return;
+                    }
                     Ok(())
                 }
                 Msg::Tick => {

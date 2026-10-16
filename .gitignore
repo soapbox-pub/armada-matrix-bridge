@@ -3,5 +3,6 @@
 /config.dev.toml
 /config.toml
 /crypto
+/control.sock
 /dev/synapse
 /tools/armada-sim/state.json

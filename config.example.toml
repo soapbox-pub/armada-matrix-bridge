@@ -41,6 +41,9 @@ master_secret = "REPLACE-ME"
 # max_media_bytes = 52428800
 # Messages copied into a newly bridged channel.
 # backfill_messages = 50
+# Where `armada-matrix-bridge list|status|invite|unbridge` reach the running
+# bridge; relative to this file.
+# control_socket = "control.sock"
 
 [encryption]
 # End-to-end encrypted Matrix rooms. Needs, in Synapse's homeserver.yaml:
@@ -55,11 +58,12 @@ master_secret = "REPLACE-ME"
 
 # Who may use the bridge: an MXID, a server name, or "*". Levels:
 #   none  - messages are not bridged
-#   user  - messages are bridged under the user's own Armada identity
-#   admin - may also bridge and unbridge communities
+#   user  - messages are bridged under the user's own Armada identity; may
+#           bridge communities and manage the ones they bridged
+#   admin - may also manage every community from Matrix (rarely needed: the
+#           operator has `armada-matrix-bridge list|unbridge` on the host)
 [permissions]
-"example.com" = "user"
-"@you:example.com" = "admin"
+"*" = "user"
 
 # [logging]
 # filter = "info,armada_matrix_bridge=debug"

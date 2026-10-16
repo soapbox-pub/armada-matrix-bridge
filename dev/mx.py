@@ -4,6 +4,7 @@
     dev/mx.py login USER PASS            # stores the token in /tmp/mxtoken-USER
     dev/mx.py [-u USER] rooms            # joined rooms with names
     dev/mx.py [-u USER] join ROOM
+    dev/mx.py [-u USER] dm MXID          # new DM with MXID, prints the room id
     dev/mx.py [-u USER] send ROOM TEXT [--reply EVENT] [--thread ROOT] [--html HTML]
     dev/mx.py [-u USER] react ROOM EVENT KEY
     dev/mx.py [-u USER] edit ROOM EVENT TEXT
@@ -43,6 +44,8 @@ elif cmd == "rooms":
     for r in call("GET", "/_matrix/client/v3/joined_rooms")["joined_rooms"]:
         name = call("GET", f"/_matrix/client/v3/rooms/{q(r)}/state/m.room.name/") if True else {}
         print(r, name.get("name"))
+elif cmd == "dm":
+    print(call("POST", "/_matrix/client/v3/createRoom", {"is_direct": True, "invite": [args[1]], "preset": "trusted_private_chat"})["room_id"])
 elif cmd == "join":
     print(call("POST", f"/_matrix/client/v3/join/{q(args[1])}", {}))
 elif cmd == "send":

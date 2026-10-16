@@ -1,5 +1,7 @@
-//! Commands: Matrix admins manage the bridge in a DM with the bot; Armada
-//! admins approve, revoke and scope it with `/bridge …` in any channel.
+//! Commands. Matrix users bridge communities and manage the ones they bridged
+//! in a DM with the bot; the operator manages any of them over the control
+//! socket; Armada admins approve, revoke and scope bridges with `/bridge …` in
+//! any channel.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +17,28 @@ use nostr::prelude::{Filter, Kind, PublicKey};
 use super::community::{self, Command, Community, Msg, Status};
 use super::{Bridge, now_ms};
 use crate::config::Permission;
+use crate::matrix::As;
+
+/// Requests nobody approves on Armada are dropped after this many days.
+pub const PENDING_DAYS: i32 = 7;
+/// Unapproved requests one Matrix user may have open at once.
+const MAX_PENDING: i64 = 3;
+
+/// Who is issuing a command.
+pub enum Who {
+    /// Someone on the host, over the control socket.
+    Operator,
+    Matrix(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Access {
+    None,
+    /// In the community's space: may see it and invite people.
+    Member,
+    /// Bridged it, or holds power level 100 in its space: may also unbridge it.
+    Manager,
+}
 
 pub fn welcome(b: &Bridge) -> String {
     format!(
@@ -28,27 +52,63 @@ fn help(b: &Bridge) -> String {
     let p = &b.config.bridge.command_prefix;
     format!(
         "Commands (the `{p}` prefix is optional here):\n\
-         - `bridge <invite link>` — join an Armada community and ask its admins to approve bridging it\n\
-         - `list` — communities this bridge knows\n\
+         - `bridge <invite link>` — bridge an Armada community once its admins approve, or join its space if it's already bridged\n\
+         - `list` — bridged communities you're in\n\
          - `status <community>` — one community's state\n\
          - `invite <community> <@user:server>` — invite someone to its Matrix space\n\
-         - `unbridge <community>` — stop bridging a community\n\n\
+         - `unbridge <community>` — stop bridging a community you bridged or administer\n\n\
          `<community>` is the start of its id or its name, as shown by `list`."
     )
 }
 
-/// Find a community by id prefix or exact name.
-async fn find(b: &Bridge, query: &str) -> Option<String> {
+fn operator_help() -> String {
+    "Commands: `list`, `status <community>`, `invite <community> <@user:server>`, `unbridge <community>`.".into()
+}
+
+async fn access(b: &Bridge, cid: &str, who: &Who) -> Access {
+    let mxid = match who {
+        Who::Operator => return Access::Manager,
+        Who::Matrix(mxid) => mxid,
+    };
+    if b.permission(mxid) >= Permission::Admin {
+        return Access::Manager;
+    }
+    let Ok(Some(row)) = b.db.community(cid).await else { return Access::None };
+    if row.requested_by == *mxid {
+        return Access::Manager;
+    }
+    let Some(space) = row.space_room_id else { return Access::None };
+    if let Ok(Some(pl)) = b.mx.get_state(As::BOT, &space, "m.room.power_levels", "").await
+        && pl["users"][mxid.as_str()].as_i64().unwrap_or(0) >= 100
+    {
+        return Access::Manager;
+    }
+    match b.mx.get_state(As::BOT, &space, "m.room.member", mxid).await {
+        Ok(Some(m)) if m["membership"] == "join" => Access::Member,
+        _ => Access::None,
+    }
+}
+
+async fn status(b: &Bridge, cid: &str) -> String {
+    b.ask(cid, |tx| Msg::Command(Command::Status, tx)).await.unwrap_or_default()
+}
+
+/// The first community matching `query` (id or name prefix) that `who`
+/// has at least `need` access to. Others are invisible, so their names don't leak.
+async fn find(b: &Bridge, who: &Who, query: &str, need: Access) -> Option<String> {
     let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    let mut matches = vec![];
     for h in b.handles().await {
-        if !query.is_empty() && h.id.starts_with(&query) {
-            return Some(h.id);
+        if h.id.starts_with(&query) || status(b, &h.id).await.to_lowercase().starts_with(&format!("**{query}")) {
+            matches.push(h.id);
         }
     }
-    for h in b.handles().await {
-        let status = b.ask(&h.id, |tx| Msg::Command(Command::Status, tx)).await.unwrap_or_default();
-        if status.to_lowercase().starts_with(&format!("**{query}**")) {
-            return Some(h.id);
+    for cid in matches {
+        if access(b, &cid, who).await >= need {
+            return Some(cid);
         }
     }
     None
@@ -57,46 +117,72 @@ async fn find(b: &Bridge, query: &str) -> Option<String> {
 pub async fn management(b: Arc<Bridge>, room: String, sender: String, body: String) {
     let text = body.trim();
     let text = text.strip_prefix(&b.config.bridge.command_prefix).unwrap_or(text).trim();
+    let reply = run(&b, &Who::Matrix(sender), Some(&room), text).await;
+    b.notice(&room, &reply).await;
+}
+
+/// A command from the control socket.
+pub async fn operator(b: Arc<Bridge>, line: &str) -> String {
+    run(&b, &Who::Operator, None, line.trim()).await
+}
+
+async fn run(b: &Arc<Bridge>, who: &Who, room: Option<&str>, text: &str) -> String {
     let (cmd, args) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let args = args.trim();
-    let admin = b.permission(&sender) >= Permission::Admin;
-    let reply = match cmd.to_lowercase().as_str() {
-        "help" | "" => help(&b),
-        "list" => {
+    let no_such = || "No such community.".to_owned();
+    match (cmd.to_lowercase().as_str(), who, room) {
+        ("help" | "", Who::Operator, _) => operator_help(),
+        ("help" | "", _, _) => help(b),
+        ("list", _, _) => {
             let mut lines = vec![];
             for h in b.handles().await {
-                if let Some(s) = b.ask(&h.id, |tx| Msg::Command(Command::Status, tx)).await {
-                    lines.push(format!("- {s}"));
+                if access(b, &h.id, who).await < Access::Member {
+                    continue;
                 }
+                let mut line = format!("- {}", status(b, &h.id).await);
+                if let Who::Operator = who
+                    && let Ok(Some(row)) = b.db.community(&h.id).await
+                {
+                    line.push_str(&format!(" [requested by {}]", row.requested_by));
+                }
+                lines.push(line);
             }
             if lines.is_empty() { "No communities yet.".into() } else { lines.join("\n") }
         }
-        "status" => match find(&b, args).await {
-            Some(cid) => b.ask(&cid, |tx| Msg::Command(Command::Status, tx)).await.unwrap_or_default(),
-            None => "No such community.".into(),
+        ("status", _, _) => match find(b, who, args, Access::Member).await {
+            Some(cid) => status(b, &cid).await,
+            None => no_such(),
         },
-        "bridge" if !admin => "Only bridge admins can bridge communities.".into(),
-        "bridge" => match bridge(b.clone(), &room, &sender, args).await {
+        ("bridge", Who::Matrix(sender), Some(room)) => match bridge(b.clone(), room, sender, args).await {
             Ok(msg) => msg,
             Err(e) => format!("Couldn't bridge that: {e:#}"),
         },
-        "unbridge" if !admin => "Only bridge admins can unbridge communities.".into(),
-        "unbridge" => match find(&b, args).await {
-            Some(cid) => b.ask(&cid, |tx| Msg::Command(Command::Unbridge { by: sender.clone() }, tx)).await.unwrap_or_default(),
-            None => "No such community.".into(),
+        ("unbridge", _, _) => match find(b, who, args, Access::Member).await {
+            Some(cid) if access(b, &cid, who).await < Access::Manager => {
+                "Only whoever bridged it, or an admin (power level 100) of its space, can unbridge it.".into()
+            }
+            Some(cid) => {
+                let by = match who {
+                    Who::Operator => "The bridge operator".to_owned(),
+                    Who::Matrix(mxid) => mxid.clone(),
+                };
+                b.ask(&cid, |tx| Msg::Command(Command::Unbridge { by }, tx)).await.unwrap_or_default()
+            }
+            None => no_such(),
         },
-        "invite" if !admin => "Only bridge admins can invite people to bridged spaces.".into(),
-        "invite" => {
+        ("invite", _, _) => {
             let (query, mxid) = args.rsplit_once(char::is_whitespace).unwrap_or((args, ""));
-            match (find(&b, query).await, mxid.starts_with('@')) {
-                (Some(cid), true) => b.ask(&cid, |tx| Msg::Command(Command::Invite { mxid: mxid.to_owned() }, tx)).await.unwrap_or_default(),
-                (None, _) => "No such community.".into(),
-                (_, false) => "Usage: `invite <community> <@user:server>`".into(),
+            if !mxid.starts_with('@') {
+                return "Usage: `invite <community> <@user:server>`".into();
+            }
+            match find(b, who, query, Access::Member).await {
+                Some(cid) => b.ask(&cid, |tx| Msg::Command(Command::Invite { mxid: mxid.to_owned() }, tx)).await.unwrap_or_default(),
+                None => no_such(),
             }
         }
-        _ => format!("Unknown command. {}", help(&b)),
-    };
-    b.notice(&room, &reply).await;
+        (_, Who::Operator, _) => format!("Unknown command. {}", operator_help()),
+        _ => format!("Unknown command. {}", help(b)),
+    }
 }
 
 async fn bridge(b: Arc<Bridge>, room: &str, sender: &str, link: &str) -> Result<String> {
@@ -110,23 +196,48 @@ async fn bridge(b: Arc<Bridge>, room: &str, sender: &str, link: &str) -> Result<
     let bundle = parse_bundle_event(&event, &link, now_ms())?;
 
     if let Some(row) = b.db.community(&bundle.community_id).await? {
-        if row.status != "revoked" {
-            let status = b.ask(&row.community_id, |tx| Msg::Command(Command::Status, tx)).await.unwrap_or_default();
-            return Ok(format!("Already known: {status}"));
+        let cid = row.community_id.clone();
+        match row.status.as_str() {
+            // A valid invite link is as good as an invitation to its space.
+            "active" => {
+                let mxid = sender.to_owned();
+                return Ok(b.ask(&cid, |tx| Msg::Command(Command::Invite { mxid }, tx)).await.unwrap_or_default());
+            }
+            "pending" => {
+                return Ok(format!("{}\n\nSend the invite link again once it's approved to join its Matrix space.", status(&b, &cid).await));
+            }
+            // Re-requesting a revoked community: fresh keys, fresh approval.
+            _ => {
+                b.db.delete_community(&cid).await?;
+                b.remove_handle(&cid).await;
+            }
         }
-        // Re-requesting a revoked community: fresh keys, fresh approval.
-        b.db.delete_community(&row.community_id).await?;
-        b.remove_handle(&row.community_id).await;
+    }
+    if b.permission(sender) < Permission::Admin && b.db.pending_count(sender).await? >= MAX_PENDING {
+        anyhow::bail!("you already have {MAX_PENDING} communities waiting for approval on Armada");
     }
     let code = community::join(b.clone(), &bundle, sender, room).await?;
     Ok(format!(
         "Joined **{}** on Armada as the bridge (`{}`).\n\n\
-         Nothing is bridged yet. Someone in that community who can **manage channels** must post this in any of its channels:\n\n\
+         Nothing is bridged yet. Someone in that community who can **manage channels** must post this in any of its channels within {PENDING_DAYS} days:\n\n\
          `/bridge approve {code}`\n\n\
          Public channels are bridged after approval; private channels only when an Armada admin runs `/bridge include` in them.",
         bundle.name,
         b.bot_npub(),
     ))
+}
+
+/// Drop requests nobody approved in time.
+pub async fn expire_pending(b: &Bridge) {
+    let Ok(stale) = b.db.stale_pending(PENDING_DAYS).await else { return };
+    for cid in stale {
+        tracing::info!(community = %cid, "dropping an unapproved bridge request");
+        b.ask(&cid, |tx| Msg::Command(Command::Expire, tx)).await;
+        b.remove_handle(&cid).await;
+        if let Err(e) = b.db.delete_community(&cid).await {
+            tracing::warn!(community = %cid, error = %e, "could not delete an expired request");
+        }
+    }
 }
 
 // ── Armada side ─────────────────────────────────────────────────────────────

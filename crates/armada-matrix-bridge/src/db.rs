@@ -165,6 +165,17 @@ impl Db {
         Ok(())
     }
 
+    pub async fn pending_count(&self, requested_by: &str) -> Result<i64> {
+        let row = self.one("SELECT count(*) FROM communities WHERE status = 'pending' AND requested_by = $1", &[&requested_by]).await?;
+        Ok(row.map(|r| r.get(0)).unwrap_or(0))
+    }
+
+    /// Pending requests nobody on Armada approved within `days`.
+    pub async fn stale_pending(&self, days: i32) -> Result<Vec<String>> {
+        let rows = self.all("SELECT community_id FROM communities WHERE status = 'pending' AND created_at < now() - make_interval(days => $1)", &[&days]).await?;
+        Ok(rows.iter().map(|r| r.get(0)).collect())
+    }
+
     pub async fn delete_community(&self, id: &str) -> Result<()> {
         self.exec("DELETE FROM communities WHERE community_id = $1", &[&id]).await?;
         Ok(())
