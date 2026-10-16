@@ -163,7 +163,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33ca55ee147b1926dbea904f50fe4902494e97bc742205abbbf10c709e43815f"
 
 [[package]]
-name = "armada-matrix"
+name = "armada-matrix-bridge"
 version = "0.1.0"
 dependencies = [
  "aes 0.8.4",

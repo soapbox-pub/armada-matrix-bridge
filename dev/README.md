@@ -7,7 +7,7 @@ networking so Synapse reaches the bridge on `127.0.0.1:8789`.
 cp config.example.toml config.dev.toml       # then point it at the stack below:
 #   homeserver.url = "http://127.0.0.1:8008", server_name = "localhost"
 #   appservice.url = "http://127.0.0.1:8789"
-#   database.url   = "postgres://armada:armada@127.0.0.1:5436/armada_matrix"
+#   database.url   = "postgres://armada:armada@127.0.0.1:5436/armada_matrix_bridge"
 #   permissions    = { "localhost" = "admin" }
 cargo run -- -c config.dev.toml generate-registration && chmod 644 registration.yaml
 

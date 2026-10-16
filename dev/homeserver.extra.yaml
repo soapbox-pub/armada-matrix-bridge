@@ -1,4 +1,4 @@
-# ── armada-matrix dev additions ──
+# ── armada-matrix-bridge dev additions ──
 app_service_config_files:
   - /data/armada-registration.yaml
 registration_shared_secret: "dev-shared-secret"

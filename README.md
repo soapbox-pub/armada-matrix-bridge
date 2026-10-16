@@ -106,7 +106,7 @@ Synapse experimental features listed below.
 ```sh
 cargo build --release
 cp config.example.toml config.toml    # edit: homeserver, database, master_secret, permissions
-./target/release/armada-matrix -c config.toml generate-registration
+./target/release/armada-matrix-bridge -c config.toml generate-registration
 ```
 
 Add the registration file to Synapse:
@@ -124,7 +124,7 @@ experimental_features:
 Restart Synapse, then run the bridge:
 
 ```sh
-./target/release/armada-matrix -c config.toml
+./target/release/armada-matrix-bridge -c config.toml
 ```
 
 Start a direct message with `@armadabot:your.server` and send it an Armada
@@ -152,7 +152,7 @@ The workspace has three crates.
   - It answers NIP-42 for every derived stream key, which relays that gate
     gift wraps require.
   - It keeps subscriptions alive across reconnects.
-- **`crates/armada-matrix`** is the appservice. Each community is one actor
+- **`crates/armada-matrix-bridge`** is the appservice. Each community is one actor
   task, so its Nostr traffic and its Matrix rooms are handled in a single order.
   - **Startup:** the bridge folds the stored Control Plane, subscribes to every
     plane it holds keys for, and reconciles the space with the fold.

@@ -1,4 +1,4 @@
-# armada-matrix configuration. Copy to config.toml and edit.
+# armada-matrix-bridge configuration. Copy to config.toml and edit.
 
 [homeserver]
 # How the bridge reaches your homeserver's client-server API.
@@ -15,11 +15,11 @@ bind = "127.0.0.1:8789"
 # bot_avatar = "mxc://example.com/abc"
 # Armada members appear as @<ghost_prefix><npub>:server.
 # ghost_prefix = "armada_"
-# Written by `armada-matrix generate-registration`; relative to this file.
+# Written by `armada-matrix-bridge generate-registration`; relative to this file.
 # registration = "registration.yaml"
 
 [database]
-url = "postgres://armada:password@127.0.0.1/armada_matrix"
+url = "postgres://armada:password@127.0.0.1/armada_matrix_bridge"
 # max_connections = 10
 
 [bridge]
@@ -28,7 +28,7 @@ url = "postgres://armada:password@127.0.0.1/armada_matrix"
 # it loses those identities and the stored community keys.
 master_secret = "REPLACE-ME"
 # The bridge's own Armada identity (nsec or hex). Derived from master_secret
-# when unset; `armada-matrix whoami` prints it.
+# when unset; `armada-matrix-bridge whoami` prints it.
 # nostr_key = "nsec1..."
 # Relays for profiles and the bot's inbox (Direct Invites). Community traffic
 # always uses each community's own relays.
@@ -62,4 +62,4 @@ master_secret = "REPLACE-ME"
 "@you:example.com" = "admin"
 
 # [logging]
-# filter = "info,armada_matrix=debug"
+# filter = "info,armada_matrix_bridge=debug"

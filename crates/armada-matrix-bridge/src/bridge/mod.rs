@@ -63,7 +63,7 @@ impl Bridge {
             .then(|| crate::matrix::e2ee::Crypto::new(mx.clone(), config.encryption.store_dir.clone(), keys.crypto_passphrase()));
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
-            .user_agent(concat!("armada-matrix/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("armada-matrix-bridge/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client");
         Arc::new(Bridge {

@@ -55,7 +55,7 @@ impl Client {
     pub fn new(base: &str, as_token: &str) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("armada-matrix/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("armada-matrix-bridge/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client");
         Client { http, base: base.to_owned(), as_token: as_token.to_owned() }

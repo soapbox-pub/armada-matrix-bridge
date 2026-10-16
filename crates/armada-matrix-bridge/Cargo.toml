@@ -1,5 +1,5 @@
 [package]
-name = "armada-matrix"
+name = "armada-matrix-bridge"
 version = "0.1.0"
 description = "A Matrix appservice bridging Armada (Concord) communities to Matrix spaces"
 edition.workspace = true

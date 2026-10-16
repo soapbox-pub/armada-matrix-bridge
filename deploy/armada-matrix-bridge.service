@@ -4,16 +4,16 @@ After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
-User=armada-matrix
-WorkingDirectory=/var/lib/armada-matrix
-ExecStart=/usr/local/bin/armada-matrix -c /var/lib/armada-matrix/config.toml
+User=armada-matrix-bridge
+WorkingDirectory=/var/lib/armada-matrix-bridge
+ExecStart=/usr/local/bin/armada-matrix-bridge -c /var/lib/armada-matrix-bridge/config.toml
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/armada-matrix
+ReadWritePaths=/var/lib/armada-matrix-bridge
 
 [Install]
 WantedBy=multi-user.target

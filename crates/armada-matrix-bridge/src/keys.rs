@@ -7,9 +7,9 @@ use hkdf::Hkdf;
 use nostr::prelude::{Keys, SecretKey};
 use sha2::Sha256;
 
-const PUPPET_LABEL: &str = "armada-matrix/puppet/v1/";
-const BOT_LABEL: &str = "armada-matrix/bot/v1";
-const SEAL_LABEL: &str = "armada-matrix/seal/v1";
+const PUPPET_LABEL: &str = "armada-matrix-bridge/puppet/v1/";
+const BOT_LABEL: &str = "armada-matrix-bridge/bot/v1";
+const SEAL_LABEL: &str = "armada-matrix-bridge/seal/v1";
 
 #[derive(Clone)]
 pub struct KeyRing {
@@ -51,7 +51,7 @@ impl KeyRing {
 
     /// The passphrase for the Matrix crypto stores.
     pub fn crypto_passphrase(&self) -> String {
-        hex::encode(hkdf(&self.master, b"armada-matrix/crypto-store/v1"))
+        hex::encode(hkdf(&self.master, b"armada-matrix-bridge/crypto-store/v1"))
     }
 
     pub fn default_bot(&self) -> Keys {
