@@ -120,22 +120,31 @@ async fn pills(c: &Community, content: &str) -> HashMap<PublicKey, Pill> {
     out
 }
 
+/// A custom emoji image on Matrix, rehosted once per URL.
+async fn emoji_mxc(c: &mut Community, url: &str) -> Option<String> {
+    if let Some(m) = c.emoji.get(url) {
+        return Some(m.clone());
+    }
+    match super::media::rehost_url(&c.b, url).await {
+        Ok(m) => {
+            c.emoji.insert(url.to_owned(), m.clone());
+            Some(m)
+        }
+        Err(e) => {
+            tracing::debug!(%url, error = %e, "custom emoji not bridged");
+            None
+        }
+    }
+}
+
 /// NIP-30 custom emoji: `:code:` in the content with an image URL tag.
 async fn custom_emoji(c: &mut Community, rumor: &concord::rumor::Rumor) -> Vec<(String, String)> {
     let mut out = vec![];
     for t in rumor.tags_named("emoji") {
         let (Some(code), Some(url)) = (t.get(1), t.get(2)) else { continue };
-        let mxc = match c.emoji.get(url) {
-            Some(m) => m.clone(),
-            None => match super::media::rehost_url(&c.b, url).await {
-                Ok(m) => {
-                    c.emoji.insert(url.clone(), m.clone());
-                    m
-                }
-                Err(_) => continue,
-            },
-        };
-        out.push((code.clone(), mxc));
+        if let Some(mxc) = emoji_mxc(c, url).await {
+            out.push((code.clone(), mxc));
+        }
     }
     out
 }
@@ -264,8 +273,18 @@ async fn reaction(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Res
     let Some(row) = mapped(c, target).await? else { return Ok(()) };
     let pk = PublicKey::from_hex(opened.author())?;
     let ghost = ghosts::ready(c, &pk, &portal.room_id).await?;
-    let key = reaction_key(&opened.rumor.content);
-    let content = json!({ "m.relates_to": { "rel_type": "m.annotation", "event_id": row.event_id, "key": key } });
+    let mut key = reaction_key(&opened.rumor.content);
+    let mut content = json!({ "m.relates_to": { "rel_type": "m.annotation", "event_id": row.event_id, "key": key } });
+    // A custom emoji reacts with its image, as Matrix clients do (MSC4027).
+    if let Some(code) = key.strip_prefix(':').and_then(|k| k.strip_suffix(':')).map(str::to_owned)
+        && let Some(url) = opened.rumor.tags_named("emoji").find(|t| t.get(1) == Some(&code)).and_then(|t| t.get(2)).cloned()
+        && let Some(mxc) = emoji_mxc(c, &url).await
+    {
+        content["m.relates_to"]["key"] = json!(mxc);
+        content["shortcode"] = json!(key);
+        content["com.beeper.reaction.shortcode"] = json!(code);
+        key = mxc;
+    }
     let event_id = c.b.send(&ghost, &portal.room_id, "m.reaction", &content, Some(opened.ms)).await?;
     c.b.db.insert_reaction(&portal.room_id, &event_id, &c.id, &opened.rumor.id, target, opened.author(), &key, "armada").await?;
     Ok(())

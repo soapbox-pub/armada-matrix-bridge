@@ -43,7 +43,7 @@ Either way:
 | Inline reply (NIP-C7 `q`) | Reply |
 | Thread reply (kind 1111) | Thread |
 | Attachment (NIP-92 `imeta`, client-encrypted) | `m.image` / `m.video` / `m.audio` / `m.file` (encrypted in encrypted rooms) |
-| Reaction (kind 7), custom emoji (NIP-30) | `m.reaction`, inline emoticons |
+| Reaction (kind 7), custom emoji (NIP-30) | `m.reaction`, inline emoticons, image reactions (MSC4027) |
 | Edit (kind 3302) | `m.replace` |
 | Delete (kind 5), by the author or a moderator | Redaction |
 | Typing (kind 23311) | Typing |
@@ -241,7 +241,6 @@ bun tools/vectors/gen.ts > crates/concord/tests/vectors/armada.json   # run from
 
 - **Matrix polls:** Armada polls arrive as text, and votes aren't bridged.
 - **Zaps, calendar events, voice/video calls and Mini Apps** aren't bridged.
-- **Custom emoji from Matrix to Armada:** reactions bridge as text.
 - **Double puppeting:** Matrix users posting under their own existing Armada
   key, instead of a derived one.
 - **NIP-29 / Buzz:** relay-hosted groups aren't supported, only Concord.

@@ -65,6 +65,41 @@ async fn puppet(c: &Community, mxid: &str) -> Result<Keys> {
     Ok(keys)
 }
 
+/// A NIP-30 `emoji` tag for a Matrix custom emoji, its image on Blossom.
+async fn emoji_tag(c: &mut Community, keys: &Keys, code: &str, mxc: &str) -> Option<Vec<String>> {
+    let url = match c.emoji_up.get(mxc) {
+        Some(u) => u.clone(),
+        None => {
+            let uploaded = match c.b.mx.download(mxc, 2 * 1024 * 1024).await {
+                Ok((bytes, _)) => super::media::upload_blob(&c.b, keys, bytes).await,
+                Err(e) => Err(e),
+            };
+            match uploaded {
+                Ok(u) => {
+                    c.emoji_up.insert(mxc.to_owned(), u.clone());
+                    u
+                }
+                Err(e) => {
+                    tracing::debug!(%mxc, error = %e, "custom emoji not bridged");
+                    return None;
+                }
+            }
+        }
+    };
+    Some(vec!["emoji".into(), code.to_owned(), url])
+}
+
+/// Matrix HTML with its custom emoji as `:code:`, and their tags.
+async fn emoticons(c: &mut Community, keys: &Keys, html: Option<&str>) -> (Option<String>, Vec<Vec<String>>) {
+    let Some(html) = html else { return (None, vec![]) };
+    let (html, found) = format::take_emoticons(html);
+    let mut tags = vec![];
+    for (code, mxc) in found {
+        tags.extend(emoji_tag(c, keys, &code, &mxc).await);
+    }
+    (Some(html), tags)
+}
+
 /// Who a pill should mention on Armada: a ghost's own key, or a Matrix user's puppet.
 fn mention_key(c: &Community, mxid: &str) -> Option<PublicKey> {
     c.b.ghost_pubkey(mxid).or_else(|| (mxid != c.b.bot_mxid).then(|| c.b.keys.puppet(mxid).public_key()))
@@ -117,8 +152,9 @@ async fn message(c: &mut Community, portal: &PortalRow, sender: &str, event: &Va
     // Text, with Matrix pills turned into nostr: mentions.
     let body = content["body"].as_str().unwrap_or_default();
     let html = (content["format"] == "org.matrix.custom.html").then(|| content["formatted_body"].as_str()).flatten();
+    let (html, emoji) = emoticons(c, &keys, html).await;
     let (mut text, mentioned) = match msgtype {
-        "m.text" | "m.notice" | "m.emote" => format::matrix_to_armada(body, html, reply_to.is_some(), &|m| mention_key(c, m)),
+        "m.text" | "m.notice" | "m.emote" => format::matrix_to_armada(body, html.as_deref(), reply_to.is_some(), &|m| mention_key(c, m)),
         // A media body is a filename unless a caption was given (`filename` set).
         _ => (content["filename"].as_str().filter(|f| *f != body).map(|_| body.to_owned()).unwrap_or_default(), vec![]),
     };
@@ -127,6 +163,7 @@ async fn message(c: &mut Community, portal: &PortalRow, sender: &str, event: &Va
     }
 
     let mut extra: Vec<Vec<String>> = mentioned.iter().map(|pk| vec!["p".to_string(), pk.to_hex()]).collect();
+    extra.extend(emoji);
     extra.push(proxy_tag(c, room, event_id));
 
     if matches!(msgtype, "m.image" | "m.video" | "m.audio" | "m.file") {
@@ -197,8 +234,10 @@ async fn edit(c: &mut Community, portal: &PortalRow, sender: &str, event: &Value
     }
     let new = &content["m.new_content"];
     let html = (new["format"] == "org.matrix.custom.html").then(|| new["formatted_body"].as_str()).flatten();
-    let (text, mentioned) = format::matrix_to_armada(new["body"].as_str().unwrap_or_default(), html, false, &|m| mention_key(c, m));
+    let (html, emoji) = emoticons(c, &keys, html).await;
+    let (text, mentioned) = format::matrix_to_armada(new["body"].as_str().unwrap_or_default(), html.as_deref(), false, &|m| mention_key(c, m));
     let mut extra: Vec<Vec<String>> = mentioned.iter().map(|pk| vec!["p".to_string(), pk.to_hex()]).collect();
+    extra.extend(emoji);
     extra.push(proxy_tag(c, &portal.room_id, event["event_id"].as_str().unwrap_or_default()));
     let (b, stream) = binding(c, portal)?;
     let expiration = row.expires_at.map(|e| e as u64);
@@ -213,9 +252,18 @@ async fn reaction(c: &mut Community, portal: &PortalRow, sender: &str, event: &V
     let Some(row) = row_for(c, &portal.room_id, target).await? else { return Ok(()) };
     let keys = puppet(c, sender).await?;
     let author = keys.public_key().to_hex();
+    // A custom emoji reaction's key is its image; Armada reacts with `:code:` (NIP-30).
+    let (text, tags) = if key.starts_with("mxc://") {
+        let content = &event["content"];
+        let name = content["com.beeper.reaction.shortcode"].as_str().or(content["shortcode"].as_str()).unwrap_or_default();
+        let code = format::shortcode(name);
+        (format!(":{code}:"), emoji_tag(c, &keys, &code, key).await.into_iter().collect())
+    } else {
+        (key.to_owned(), vec![])
+    };
     let (b, stream) = binding(c, portal)?;
     let t = Target { id: &row.rumor_id, kind: row.kind as u16, author: &row.author, tags: &[] };
-    let rumor = chat::reaction(&b, &author, &t, key, vec![], now_ms(), c.timer_secs());
+    let rumor = chat::reaction(&b, &author, &t, &text, tags, now_ms(), c.timer_secs());
     let expiration = rumor.tag_value("expiration").and_then(concord::parse_tag_decimal);
     c.publish(&rumor, Plane::Chat, &stream, &keys, WrapOptions { expiration, ..Default::default() }).await?;
     let event_id = event["event_id"].as_str().unwrap_or_default();

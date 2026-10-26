@@ -156,6 +156,8 @@ pub struct Community {
     pub typing_sent: HashMap<String, std::time::Instant>,
     /// Custom emoji image URL → mxc.
     pub emoji: HashMap<String, String>,
+    /// Matrix custom emoji mxc → its Blossom URL.
+    pub emoji_up: HashMap<String, String>,
     subscribed: HashMap<PlaneSub, Vec<String>>,
     /// Newest chat wrap seen, for catching up after downtime.
     chat_cursor: Option<u64>,
@@ -710,6 +712,7 @@ fn new_community(b: Arc<Bridge>, row: &CommunityRow, m: Membership) -> Community
         seen: lru::LruCache::new(NonZeroUsize::new(20_000).unwrap()),
         typing_sent: HashMap::new(),
         emoji: HashMap::new(),
+        emoji_up: HashMap::new(),
         subscribed: HashMap::new(),
         chat_cursor: None,
         b,
