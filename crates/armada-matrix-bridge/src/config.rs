@@ -122,8 +122,10 @@ pub enum Permission {
     /// Messages are not bridged.
     None,
     /// Messages are bridged under the user's own Armada puppet, and the user may
-    /// bridge communities and manage the ones they bridged.
+    /// join communities that are already bridged.
     User,
+    /// May also bridge new communities and manage the ones they bridged.
+    Bridge,
     /// May also manage every community from Matrix.
     Admin,
 }

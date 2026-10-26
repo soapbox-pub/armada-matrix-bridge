@@ -23,6 +23,7 @@ use crate::matrix::As;
 pub const PENDING_DAYS: i32 = 7;
 /// Unapproved requests one Matrix user may have open at once.
 const MAX_PENDING: i64 = 3;
+const NOT_ALLOWED: &str = "this bridge only bridges new communities for approved users; ask its operator for access";
 
 /// Who is issuing a command.
 pub enum Who {
@@ -206,12 +207,16 @@ async fn bridge(b: Arc<Bridge>, room: &str, sender: &str, link: &str) -> Result<
             "pending" => {
                 return Ok(format!("{}\n\nSend the invite link again once it's approved to join its Matrix space.", status(&b, &cid).await));
             }
+            _ if b.permission(sender) < Permission::Bridge => anyhow::bail!("{NOT_ALLOWED}"),
             // Re-requesting a revoked community: fresh keys, fresh approval.
             _ => {
                 b.db.delete_community(&cid).await?;
                 b.remove_handle(&cid).await;
             }
         }
+    }
+    if b.permission(sender) < Permission::Bridge {
+        anyhow::bail!("{NOT_ALLOWED}");
     }
     if b.permission(sender) < Permission::Admin && b.db.pending_count(sender).await? >= MAX_PENDING {
         anyhow::bail!("you already have {MAX_PENDING} communities waiting for approval on Armada");

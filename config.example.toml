@@ -58,12 +58,15 @@ master_secret = "REPLACE-ME"
 
 # Who may use the bridge: an MXID, a server name, or "*". Levels:
 #   none  - messages are not bridged
-#   user  - messages are bridged under the user's own Armada identity; may
-#           bridge communities and manage the ones they bridged
-#   admin - may also manage every community from Matrix (rarely needed: the
-#           operator has `armada-matrix-bridge list|unbridge` on the host)
+#   user   - messages are bridged under the user's own Armada identity; may
+#            join communities that are already bridged
+#   bridge - may also bridge new communities and manage the ones they bridged
+#   admin  - may also manage every community from Matrix (rarely needed: the
+#            operator has `armada-matrix-bridge list|unbridge` on the host)
+# Set "*" = "bridge" to let anyone start a bridge.
 [permissions]
 "*" = "user"
+# "@alice:example.com" = "bridge"
 
 # [logging]
 # filter = "info,armada_matrix_bridge=debug"

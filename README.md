@@ -14,7 +14,8 @@ as a member and mirrors it into a Matrix space.
     derived from their MXID, so it's stable without being stored.
   - No messages arrive as "the bridge says X said Y".
 - **Both sides must agree.**
-  - Any Matrix user with an invite link can start a bridge.
+  - A Matrix user with an invite link starts a bridge (everyone, or only the
+    users the operator allows).
   - Nothing crosses until someone in the Armada community who can manage
     channels approves it there.
   - Armada admins can scope or revoke the bridge at any time.
@@ -92,7 +93,7 @@ there.
 
 | Command | Who | Effect |
 |---|---|---|
-| `bridge <invite link>` | Anyone | Ask to bridge a community, or join its space if it is already bridged |
+| `bridge <invite link>` | Anyone | Join a bridged community's space; with `bridge` permission, ask to bridge a new one |
 | `list` | Anyone | Bridged communities whose space you're in |
 | `status <community>` | Space members | One community's state |
 | `invite <community> <@user:server>` | Space members | Invite someone into its space |
@@ -103,8 +104,9 @@ are whoever bridged it and anyone with power level 100 in its space. Other
 people's communities are invisible: commands answer "No such community".
 
 "Anyone" means anyone allowed by `[permissions]`, which also decides whose
-messages are bridged at all. Users given `admin` there manage every community
-from Matrix; most deployments need none.
+messages are bridged at all. Only users given `bridge` there can bridge new
+communities; `"*" = "bridge"` lets anyone. Users given `admin` also manage
+every community from Matrix; most deployments need none.
 
 ## Operator commands
 
