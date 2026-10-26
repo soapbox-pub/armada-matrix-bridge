@@ -5,6 +5,7 @@
 //   bun tools/armada-sim/sim.ts say general "hello"       # post as the owner (or --as alice)
 //   bun tools/armada-sim/sim.ts tail 30                   # print decrypted chat for 30 s
 //   bun tools/armada-sim/sim.ts channel random            # add a channel
+//   bun tools/armada-sim/sim.ts invite-bot <hex pubkey>   # Direct Invite someone (the bridge)
 //
 // State (keys!) lives in tools/armada-sim/state.json, which is gitignored.
 
@@ -145,7 +146,7 @@ if (cmd === "create") {
   const linkSigner = invite.mintLinkSigner();
   const token = invite.mintToken();
   const bundle = { community_id: community.idHex, owner, owner_salt: bytesToHex(community.ownerSalt), community_root: bytesToHex(community.root), root_epoch: 0, control_pk: community.controlPk, channels: [], relays: RELAYS, name: community.name, creator_npub: owner };
-  await publishAll(rs, invite.buildBundleEvent(bundle, token, linkSigner.sk));
+  await publishAll(rs, await invite.buildBundleEvent(bundle, token, linkSigner.sk));
   s.link = invite.buildInviteUrl("https://armada.buzz", linkSigner.pk, token, RELAYS);
   save(s);
   for (const name of ["owner", "alice"] as const) {
@@ -160,6 +161,19 @@ if (cmd === "create") {
   const s = load();
   const rs = await relays([hexToBytes(s.owner), ...streamKeys(s)]);
   await addChannel(s, rs, args[0]);
+  process.exit(0);
+} else if (cmd === "invite-bot") {
+  // A Direct Invite from the owner to `args[0]` (hex pubkey), as Armada's "Invite" sends.
+  const s = load();
+  const c = s.community;
+  const directInvite = await lib("directInvite");
+  const { getConversationKey, encrypt } = await import("nostr-tools/nip44");
+  const sk = hexToBytes(s.owner);
+  const bundle = { community_id: c.id, owner: c.owner, owner_salt: c.ownerSalt, community_root: c.root, root_epoch: 0, control_pk: c.controlPk, channels: [], relays: c.relays, name: c.name, creator_npub: c.owner };
+  const ownerSigner = { ...signer(sk), nip44: { encrypt: async (pk: string, text: string) => encrypt(text, getConversationKey(sk, pk)), decrypt: async () => "" } };
+  const seal = await directInvite.sealDirectInvite(directInvite.buildDirectInviteRumor(bundle, getPublicKey(sk)), args[0], ownerSigner);
+  const rs = await relays([sk]);
+  await publishAll(rs, await directInvite.wrapDirectInvite(seal, args[0]));
   process.exit(0);
 } else if (cmd === "say") {
   const s = load();
@@ -176,7 +190,7 @@ if (cmd === "create") {
   const threadIdx = process.argv.indexOf("--thread");
   if (threadIdx > 0) tags.push(["K", "9"], ["E", process.argv[threadIdx + 1], "", process.argv[threadIdx + 2]], ["P", process.argv[threadIdx + 2]], ["k", "9"], ["e", process.argv[threadIdx + 1], "", process.argv[threadIdx + 2]], ["p", process.argv[threadIdx + 2]]);
   const rumor = stream.buildRumor({ kind: threadIdx > 0 ? 1111 : 9, content: args[1], tags, pubkey: getPublicKey(sk), ms: Date.now() });
-  await publishAll(rs, stream.wrapSeal(await stream.sealRumor(rumor, 20013, group, signer(sk)), group));
+  await publishAll(rs, await stream.wrapSeal(await stream.sealRumor(rumor, 20013, group, signer(sk)), group));
   console.log(rumor.id);
   process.exit(0);
 } else if (cmd === "tail") {
@@ -200,6 +214,6 @@ if (cmd === "create") {
   }
   setTimeout(() => process.exit(0), Number(args[0] ?? 20) * 1000);
 } else {
-  console.error("usage: create <name> | channel <name> | say <channel> <text> [--as alice] [--reply <id> <author>] | tail <secs> [lookback]");
+  console.error("usage: create <name> | channel <name> | invite-bot <hex> | say <channel> <text> [--as alice] [--reply <id> <author>] | tail <secs> [lookback]");
   process.exit(1);
 }
