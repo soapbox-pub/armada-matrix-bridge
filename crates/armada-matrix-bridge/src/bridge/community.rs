@@ -34,6 +34,14 @@ pub enum PlaneSub {
     Dissolved,
 }
 
+/// A relay subscription id, `<community id prefix>:<plane>`. Most relays cap
+/// ids at 64 characters, so the full 64-hex id doesn't fit.
+pub fn sub_id(cid: &str, plane: PlaneSub) -> String {
+    format!("{}:{}", &cid[..SUB_PREFIX.min(cid.len())], plane.name())
+}
+
+pub const SUB_PREFIX: usize = 32;
+
 impl PlaneSub {
     pub fn name(self) -> &'static str {
         match self {
@@ -295,7 +303,7 @@ impl Community {
                 continue;
             }
             self.subscribed.insert(plane, pks);
-            self.b.pool.subscribe(&format!("{}:{}", self.id, plane.name()), &relays, filters);
+            self.b.pool.subscribe(&sub_id(&self.id, plane), &relays, filters);
         }
     }
 
@@ -529,7 +537,7 @@ impl Community {
             self.b.notice(room, &format!("**{}**: {why}", self.name())).await;
         }
         for plane in [PlaneSub::Chat, PlaneSub::Live, PlaneSub::Guestbook, PlaneSub::Rekey] {
-            self.b.pool.unsubscribe(&format!("{}:{}", self.id, plane.name()));
+            self.b.pool.unsubscribe(&sub_id(&self.id, plane));
         }
     }
 
@@ -596,7 +604,7 @@ impl Community {
                 let leave = concord::guestbook::leave(&self.b.bot_hex(), now_ms());
                 let _ = self.publish(&leave, Plane::Guestbook, &self.m.current_guestbook_stream(), &self.b.bot, WrapOptions::default()).await;
                 for plane in [PlaneSub::Control, PlaneSub::Guestbook, PlaneSub::Rekey, PlaneSub::Chat, PlaneSub::Live, PlaneSub::Dissolved] {
-                    self.b.pool.unsubscribe(&format!("{}:{}", self.id, plane.name()));
+                    self.b.pool.unsubscribe(&sub_id(&self.id, plane));
                 }
                 String::new()
             }
@@ -757,4 +765,21 @@ pub async fn join_invited(b: Arc<Bridge>, invite: &DirectInvite) -> Result<()> {
     c.publish_bot_join(None).await.context("publishing the bridge's Join")?;
     spawn(b, row, c.m, vec![]).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sub_ids_fit_relay_limits() {
+        let cid = "8065a0e7ecd6b99fa60aaffc0559b2bdb4b768c21b566ad8855ddd443416eb29";
+        for plane in [PlaneSub::Control, PlaneSub::Guestbook, PlaneSub::Rekey, PlaneSub::Chat, PlaneSub::Live, PlaneSub::Dissolved] {
+            let id = sub_id(cid, plane);
+            assert!(id.len() <= 64, "{id}");
+            let (prefix, name) = id.split_once(':').unwrap();
+            assert!(cid.starts_with(prefix));
+            assert_eq!(PlaneSub::parse(name), Some(plane));
+        }
+    }
 }

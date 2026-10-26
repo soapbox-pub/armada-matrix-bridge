@@ -73,7 +73,6 @@ fn help(b: &Bridge) -> String {
     format!(
         "To link a Matrix room to an Armada channel, invite me to the room and send `{p} link` there.\n\n\
          Commands here (the `{p}` prefix is optional):\n\
-         - `bridge <invite link>` — bridge a whole Armada community as a new Matrix space once its admins approve, or join its space if it's already bridged\n\
          - `list` — bridged communities you're in\n\
          - `status <community>` — one community's state\n\
          - `invite <community> <@user:server>` — invite someone to its Matrix space\n\
@@ -258,8 +257,8 @@ async fn bridge(b: Arc<Bridge>, room: &str, sender: &str, link: &str) -> Result<
 
 /// What a Matrix user can do in `room`, from its power levels: whether they
 /// may change its settings (at least `state_default`, or a room v12 creator),
-/// and what the bridge would be missing there.
-async fn room_check(b: &Bridge, room: &str, mxid: &str) -> Result<(bool, Vec<String>)> {
+/// what the bridge would be missing there, and what would merely work less well.
+async fn room_check(b: &Bridge, room: &str, mxid: &str) -> Result<(bool, Vec<String>, Vec<String>)> {
     let state = b.mx.get(&format!("/_matrix/client/v3/rooms/{}/state", enc(room)), As::BOT).await?;
     let events = state.as_array().cloned().unwrap_or_default();
     let find = |t: &str| events.iter().find(|e| e["type"] == t && e["state_key"] == "").cloned();
@@ -269,7 +268,7 @@ async fn room_check(b: &Bridge, room: &str, mxid: &str) -> Result<(bool, Vec<Str
     let v12 = create["content"]["room_version"].as_str().and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v >= 12);
     let Some(pl) = find("m.room.power_levels").map(|e| e["content"].clone()) else {
         // No power levels: the creator holds 100, everyone else 0.
-        return Ok((creators.contains(&mxid), vec![]));
+        return Ok((creators.contains(&mxid), vec![], vec![]));
     };
     let level = |v: &Value, default: i64| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(default);
     let users_default = level(&pl["users_default"], 0);
@@ -283,7 +282,14 @@ async fn room_check(b: &Bridge, room: &str, mxid: &str) -> Result<(bool, Vec<Str
     if users_default < send {
         missing.push("New members can't send messages here, so Armada members couldn't post. Let the default role send messages.".into());
     }
-    Ok((moderator, missing))
+    let mut notes = vec![];
+    if of(&b.bot_mxid) < level(&pl["redact"], 50) {
+        notes.push(format!(
+            "When an Armada moderator deletes a message that came from Matrix, I can only remove it here if {} may remove messages (redact).",
+            b.bot_mxid
+        ));
+    }
+    Ok((moderator, missing, notes))
 }
 
 /// `!armada link`: a code that links this room to the Armada channel it is posted in.
@@ -294,7 +300,7 @@ async fn link_code(b: &Bridge, room: &str, sender: &str) -> Result<String> {
     if let Some((_, true)) = b.db.management_room(room).await? {
         anyhow::bail!("send this in the Matrix room you want to link, not in a direct message with me");
     }
-    let (moderator, missing) = room_check(b, room, sender).await?;
+    let (moderator, missing, notes) = room_check(b, room, sender).await?;
     if !moderator {
         anyhow::bail!("only this room's moderators can link it");
     }
@@ -316,6 +322,9 @@ async fn link_code(b: &Bridge, room: &str, sender: &str) -> Result<String> {
             reply.push_str(&format!("- {m}\n"));
         }
     }
+    for n in notes {
+        reply.push_str(&format!("\n\nOptional: {n}"));
+    }
     Ok(reply)
 }
 
@@ -327,7 +336,7 @@ pub async fn portal(b: Arc<Bridge>, cid: String, room: String, sender: String, t
         "status" => status(&b, &cid).await,
         "link" => format!("This room is already linked. Send `{p}unlink` first to link it somewhere else."),
         "unlink" => match room_check(&b, &room, &sender).await {
-            Ok((true, _)) => b.ask(&cid, |tx| Msg::Command(Command::Unlink { room: room.clone(), by: sender.clone() }, tx)).await.unwrap_or_default(),
+            Ok((true, _, _)) => b.ask(&cid, |tx| Msg::Command(Command::Unlink { room: room.clone(), by: sender.clone() }, tx)).await.unwrap_or_default(),
             Ok(_) => "Only this room's moderators can unlink it.".into(),
             Err(e) => format!("Couldn't check your power level here: {e:#}"),
         },

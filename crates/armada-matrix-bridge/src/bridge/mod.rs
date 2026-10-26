@@ -127,6 +127,10 @@ impl Bridge {
         self.communities.read().await.get(cid).cloned()
     }
 
+    async fn handle_by_prefix(&self, prefix: &str) -> Option<CommunityHandle> {
+        self.communities.read().await.iter().find(|(id, _)| id.starts_with(prefix)).map(|(_, h)| h.clone())
+    }
+
     pub async fn handles(&self) -> Vec<CommunityHandle> {
         self.communities.read().await.values().cloned().collect()
     }
@@ -293,7 +297,7 @@ impl Bridge {
 
     // ── Routing ─────────────────────────────────────────────────────────────
 
-    /// Route Nostr traffic: subscription ids are `<community id>:<plane>`.
+    /// Route Nostr traffic: subscription ids are [`community::sub_id`].
     pub async fn run_nostr(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<PoolEvent>) {
         while let Some(ev) = rx.recv().await {
             let PoolEvent::Event { relay, sub_id, event } = ev else { continue };
@@ -302,9 +306,9 @@ impl Bridge {
                 tokio::spawn(async move { this.direct_invite(event).await });
                 continue;
             }
-            let Some((cid, plane)) = sub_id.split_once(':') else { continue };
+            let Some((prefix, plane)) = sub_id.split_once(':') else { continue };
             let Some(plane) = community::PlaneSub::parse(plane) else { continue };
-            if let Some(handle) = self.handle(cid).await {
+            if let Some(handle) = self.handle_by_prefix(prefix).await {
                 let _ = handle.tx.send(Msg::Wrap { plane, relay, event: Box::new(event) });
             }
         }
@@ -386,7 +390,16 @@ impl Bridge {
         // Invites to the bot: accept from anyone allowed to use the bridge.
         if kind == "m.room.member" && event["state_key"].as_str() == Some(self.bot_mxid.as_str()) && event["content"]["membership"] == "invite" {
             if self.permission(&sender) >= Permission::User {
+                if is_space(&event) {
+                    self.refuse_space(&room, &sender).await;
+                    return Ok(());
+                }
                 self.mx.join(&self.bot_mxid, &room).await?;
+                // The invite didn't carry the room's type; now we can read it.
+                if self.mx.get_state(As::BOT, &room, "m.room.create", "").await.ok().flatten().is_some_and(|c| c["type"] == "m.space") {
+                    self.refuse_space(&room, &sender).await;
+                    return Ok(());
+                }
                 if self.mx.get_state(As::BOT, &room, "m.room.encryption", "").await.ok().flatten().is_some() {
                     self.mark_encrypted(&room).await;
                 }
@@ -439,6 +452,31 @@ impl Bridge {
         Ok(())
     }
 
+    /// Leave a space someone invited the bot to, and tell them in a DM: a space
+    /// shows no messages, so a notice there would go unseen.
+    async fn refuse_space(&self, space: &str, inviter: &str) {
+        let reason = "This is a space. Invite me to a room inside it instead.";
+        let _ = self.mx.post(&format!("/_matrix/client/v3/rooms/{}/leave", crate::matrix::client::enc(space)), As::BOT, &json!({ "reason": reason })).await;
+        let dm = match self.db.direct_room(inviter).await {
+            Ok(Some(room)) => room,
+            _ => {
+                let body = json!({ "is_direct": true, "invite": [inviter], "preset": "trusted_private_chat" });
+                match self.mx.create_room(As::BOT, &body).await {
+                    Ok(room) => {
+                        let _ = self.db.set_management_room(&room, inviter, true).await;
+                        room
+                    }
+                    Err(e) => {
+                        tracing::warn!(%inviter, error = %e, "could not open a DM to explain a space invite");
+                        return;
+                    }
+                }
+            }
+        };
+        let p = &self.config.bridge.command_prefix;
+        self.notice(&dm, &format!("You invited me to a space, which can't hold messages, so I left it. Invite me to the chat room you want to bridge instead, then send `{p} link` there.")).await;
+    }
+
     async fn matrix_ephemeral(&self, edu: Value) {
         if edu["type"] != "m.typing" {
             return;
@@ -472,4 +510,11 @@ impl Bridge {
             }
         }
     }
+}
+
+/// Whether an invite is to a space, from the stripped state that comes with it.
+fn is_space(invite: &Value) -> bool {
+    invite["unsigned"]["invite_room_state"]
+        .as_array()
+        .is_some_and(|state| state.iter().any(|e| e["type"] == "m.room.create" && e["content"]["type"] == "m.space"))
 }

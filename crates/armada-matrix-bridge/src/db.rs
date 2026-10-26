@@ -439,6 +439,11 @@ impl Db {
         Ok(self.one("SELECT mxid, direct FROM management_rooms WHERE room_id = $1", &[&room]).await?.map(|r| (r.get(0), r.get(1))))
     }
 
+    /// A DM the bot already shares with `mxid`.
+    pub async fn direct_room(&self, mxid: &str) -> Result<Option<String>> {
+        Ok(self.one("SELECT room_id FROM management_rooms WHERE mxid = $1 AND direct LIMIT 1", &[&mxid]).await?.map(|r| r.get(0)))
+    }
+
     pub async fn set_management_room(&self, room: &str, mxid: &str, direct: bool) -> Result<()> {
         self.exec(
             "INSERT INTO management_rooms (room_id, mxid, direct) VALUES ($1, $2, $3) ON CONFLICT (room_id) DO UPDATE SET mxid = $2, direct = $3",

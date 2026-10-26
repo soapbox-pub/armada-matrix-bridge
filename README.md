@@ -117,7 +117,8 @@ In a room you want to link (after inviting the bot):
 | `!armada status` | Anyone | What this room is linked to |
 
 Moderators are users at or above the room's `state_default` power level
-(usually 50). Kicking the bot also unlinks the room. The bot needs to be able
+(usually 50). Kicking the bot also unlinks the room. Invite it to the chat room
+itself, not to a space: it leaves spaces and says so in a DM. The bot needs to be able
 to invite (to bring in Armada members), and members at the default level need
 to be able to send messages; `!armada link` says if either is missing.
 
