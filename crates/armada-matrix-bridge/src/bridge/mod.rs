@@ -115,6 +115,10 @@ impl Bridge {
         self.rooms.write().await.insert(room.to_owned(), cid.to_owned());
     }
 
+    pub async fn unregister_room(&self, room: &str) {
+        self.rooms.write().await.remove(room);
+    }
+
     pub async fn community_of_room(&self, room: &str) -> Option<String> {
         self.rooms.read().await.get(room).cloned()
     }
@@ -252,7 +256,10 @@ impl Bridge {
         let relays = self.relays();
         let profile = json!({
             "name": self.config.appservice.bot_displayname,
-            "about": format!("Bridges Armada communities to Matrix ({}). An admin approves with /bridge approve <code>.", self.config.homeserver.server_name),
+            "about": format!(
+                "Bridges Armada channels to Matrix rooms ({}). Invite me to your community, run !armada link in your Matrix room, and post /bridge link <code> in the channel.",
+                self.config.homeserver.server_name
+            ),
             "bot": true,
         });
         let dm_relays: Vec<nostr::prelude::Tag> = relays.iter().filter_map(|r| nostr::prelude::Tag::parse(["relay", r.as_str()]).ok()).collect();
@@ -260,8 +267,8 @@ impl Bridge {
             "v": 1,
             "commands": [
                 { "name": "bridge", "description": "Manage the Matrix bridge for this community", "args": [
-                    { "name": "action", "type": "choice", "description": "", "required": true, "choices": ["approve", "revoke", "status", "include", "exclude"] },
-                    { "name": "code", "type": "string", "description": "The approval code shown on Matrix", "required": false },
+                    { "name": "action", "type": "choice", "description": "", "required": true, "choices": ["link", "unlink", "status", "revoke", "approve", "include", "exclude"] },
+                    { "name": "code", "type": "string", "description": "The code shown on Matrix", "required": false },
                 ] },
             ],
         });
@@ -304,16 +311,31 @@ impl Bridge {
     }
 
     async fn direct_invite(self: Arc<Self>, event: Event) {
-        let Some(invite) = concord::direct_invite::unwrap(&event, &self.bot) else { return };
+        let Some(invite) = concord::direct_invite::unwrap(&event, &self.bot) else {
+            tracing::debug!(wrap = %event.id, "a giftwrap in the inbox isn't a valid Direct Invite");
+            return;
+        };
         let cid = invite.bundle.community_id.clone();
         match self.db.mark_direct_invite(&event.id.to_hex(), Some(&cid), Some(&invite.inviter)).await {
             Ok(true) => {}
             _ => return,
         }
-        if let Some(handle) = self.handle(&cid).await {
+        // Invited back after a revoke: start over, with fresh keys.
+        if let Ok(Some(row)) = self.db.community(&cid).await
+            && row.status == "revoked"
+        {
+            self.remove_handle(&cid).await;
+            if let Err(e) = self.db.delete_community(&cid).await {
+                tracing::warn!(community = %cid, error = %e, "could not clear a revoked community");
+                return;
+            }
+        } else if let Some(handle) = self.handle(&cid).await {
             let _ = handle.tx.send(Msg::DirectInvite(Box::new(invite)));
-        } else {
-            tracing::info!(community = %cid, inviter = %invite.inviter, name = %invite.bundle.name, "Direct Invite to an unbridged community; a Matrix user can bridge it with an invite link");
+            return;
+        }
+        match community::join_invited(self.clone(), &invite).await {
+            Ok(()) => tracing::info!(community = %cid, inviter = %invite.inviter, name = %invite.bundle.name, "joined a community on a Direct Invite"),
+            Err(e) => tracing::warn!(community = %cid, error = %format!("{e:#}"), "could not join a community on a Direct Invite"),
         }
     }
 
@@ -368,29 +390,49 @@ impl Bridge {
                 if self.mx.get_state(As::BOT, &room, "m.room.encryption", "").await.ok().flatten().is_some() {
                     self.mark_encrypted(&room).await;
                 }
-                if event["content"]["is_direct"].as_bool() == Some(true) || self.community_of_room(&room).await.is_none() {
-                    self.db.set_management_room(&room, &sender).await?;
-                    self.notice(&room, &commands::welcome(self)).await;
+                let direct = event["content"]["is_direct"].as_bool() == Some(true);
+                if direct || self.community_of_room(&room).await.is_none() {
+                    self.db.set_management_room(&room, &sender, direct).await?;
+                    self.notice(&room, &if direct { commands::welcome(self) } else { commands::room_welcome(self) }).await;
                 }
             } else {
                 let _ = self.mx.leave(&self.bot_mxid, &room).await;
             }
             return Ok(());
         }
+        // Removed from a linked room: unlink it.
+        if kind == "m.room.member"
+            && event["state_key"].as_str() == Some(self.bot_mxid.as_str())
+            && matches!(event["content"]["membership"].as_str(), Some("leave" | "ban"))
+            && let Some(cid) = self.community_of_room(&room).await
+        {
+            self.ask(&cid, |tx| Msg::Command(community::Command::Unlink { room, by: sender }, tx)).await;
+            return Ok(());
+        }
         if self.in_namespace(&sender) {
             return Ok(());
         }
+        let body = event["content"]["body"].as_str().unwrap_or_default().trim().to_owned();
+        let command = (kind == "m.room.message")
+            .then(|| body.strip_prefix(&self.config.bridge.command_prefix))
+            .flatten()
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            .map(|rest| rest.trim().to_owned());
         if let Some(cid) = self.community_of_room(&room).await {
-            if let Some(handle) = self.handle(&cid).await {
+            if let Some(text) = command {
+                let this = self.clone();
+                tokio::spawn(async move { commands::portal(this, cid, room, sender, text).await });
+            } else if let Some(handle) = self.handle(&cid).await {
                 let _ = handle.tx.send(Msg::Matrix(Box::new(event)));
             }
             return Ok(());
         }
+        // In a DM, its owner needs no prefix; in other rooms, anyone allowed may
+        // use the prefix.
         if kind == "m.room.message"
-            && let Some(owner) = self.db.management_room(&room).await?
-            && owner == sender
+            && let Some((owner, direct)) = self.db.management_room(&room).await?
+            && ((direct && owner == sender) || (command.is_some() && self.permission(&sender) >= Permission::User))
         {
-            let body = event["content"]["body"].as_str().unwrap_or_default().to_owned();
             let this = self.clone();
             tokio::spawn(async move { commands::management(this, room, sender, body).await });
         }

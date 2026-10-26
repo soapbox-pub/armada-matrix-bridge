@@ -1,6 +1,8 @@
-//! The Matrix side of a community: one space, one portal room per bridged
-//! channel. Armada's Control Plane is the authority for names, topics, ordering
-//! and which channels exist; this module makes Matrix follow it.
+//! The Matrix side of a community. In space mode: one space, one portal room per
+//! bridged channel, and Armada's Control Plane is the authority for names,
+//! topics, ordering and which channels exist; this module makes Matrix follow
+//! it. In linked mode the rooms belong to their Matrix owners: the bot only
+//! links and unlinks them, and changes none of their settings.
 
 use std::time::Duration;
 
@@ -131,6 +133,9 @@ async fn create_portal(c: &mut Community, space: &str, ch: &ChannelView, index: 
 
 /// Bring the space and portals in line with the folded Control Plane.
 pub async fn reconcile(c: &mut Community) -> Result<()> {
+    if c.linked {
+        return reconcile_linked(c).await;
+    }
     let space = ensure_space(c).await?;
 
     let meta_key = format!("space-meta:{}:{}", c.name(), c.folded.metadata.as_ref().and_then(|m| m.description.clone()).unwrap_or_default());
@@ -201,5 +206,64 @@ pub async fn invite_user(c: &Community, space: &str, mxid: &str) -> Result<()> {
         c.b.mx.invite(As::BOT, &p.room_id, mxid).await?;
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    Ok(())
+}
+
+/// Linked mode: follow only whether each linked channel can still be read.
+async fn reconcile_linked(c: &mut Community) -> Result<()> {
+    let portals: Vec<PortalRow> = c.portals.values().cloned().collect();
+    for p in portals {
+        let live = c.channel(&p.channel_id).map(|ch| ch.name.clone());
+        let enabled = live.is_some();
+        let name = live.unwrap_or_else(|| p.name.clone());
+        if p.enabled != enabled {
+            let note = if enabled {
+                "The linked Armada channel is readable again; messages are bridged again."
+            } else if c.folded.channels.get(&p.channel_id).is_some_and(|f| f.deleted) {
+                "The linked channel was deleted on Armada. Messages are no longer bridged."
+            } else {
+                "The bridge can no longer read the linked channel on Armada. Messages are no longer bridged."
+            };
+            c.b.notice(&p.room_id, note).await;
+        }
+        if p.enabled != enabled || p.name != name {
+            c.b.db.update_portal(&p.room_id, enabled, &name).await?;
+            let entry = c.portals.get_mut(&p.channel_id).unwrap();
+            entry.enabled = enabled;
+            entry.name = name;
+        }
+    }
+    Ok(())
+}
+
+/// Link an existing Matrix room to a channel.
+pub async fn link(c: &mut Community, channel_id: &str, room: &str) -> Result<()> {
+    let name = c.channel(channel_id).context("channel is not readable")?.name.clone();
+    let encrypted = c.b.mx.get_state(As::BOT, room, "m.room.encryption", "").await?.is_some();
+    c.b.db.insert_portal(&c.id, channel_id, room, encrypted, &name).await?;
+    if encrypted {
+        c.b.mark_encrypted(room).await;
+    }
+    c.b.db.set_room_member(room, &c.b.bot_mxid, true).await?;
+    c.b.register_room(room, &c.id).await;
+    c.portals.insert(
+        channel_id.to_owned(),
+        PortalRow { community_id: c.id.clone(), channel_id: channel_id.to_owned(), room_id: room.to_owned(), enabled: true, encrypted, name },
+    );
+    Ok(())
+}
+
+/// Undo a link. The ghosts leave the room; the bot stays, so it can be linked again.
+pub async fn unlink(c: &mut Community, channel_id: &str, why: &str) -> Result<()> {
+    let Some(p) = c.portals.remove(channel_id) else { return Ok(()) };
+    c.b.notice(&p.room_id, why).await;
+    for mxid in c.b.db.room_members(&p.room_id).await? {
+        if mxid != c.b.bot_mxid {
+            let _ = c.b.mx.leave(&mxid, &p.room_id).await;
+            c.b.db.set_room_member(&p.room_id, &mxid, false).await?;
+        }
+    }
+    c.b.db.delete_portal(&p.room_id).await?;
+    c.b.unregister_room(&p.room_id).await;
     Ok(())
 }

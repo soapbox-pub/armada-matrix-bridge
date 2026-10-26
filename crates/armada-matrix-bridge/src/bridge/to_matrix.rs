@@ -319,16 +319,14 @@ async fn delete(c: &mut Community, portal: &PortalRow, opened: &Opened) -> Resul
         let rows = c.b.db.messages_by_rumor(&c.id, target).await?;
         let Some(first) = rows.first() else { continue };
         let f = &c.folded;
-        let actor = if first.author == deleter {
-            c.b.ghost_mxid(&PublicKey::from_hex(deleter)?)
-        } else if f.roster.can_act_on_member(deleter, &f.owner, &first.author, perm::MANAGE_MESSAGES)
-            && f.citation_satisfied(&c.id_bytes, deleter, citation.as_ref())
+        let by_author = first.author == deleter;
+        if !by_author
+            && !(f.roster.can_act_on_member(deleter, &f.owner, &first.author, perm::MANAGE_MESSAGES) && f.citation_satisfied(&c.id_bytes, deleter, citation.as_ref()))
         {
-            c.b.bot_mxid.clone()
-        } else {
             continue;
-        };
-        let reason = (actor == c.b.bot_mxid).then_some("Deleted by a moderator on Armada");
+        }
+        let actor = redactor(c, first);
+        let reason = (!by_author).then_some("Deleted by a moderator on Armada");
         for row in rows.iter().filter(|r| r.room_id == portal.room_id) {
             c.b.mx.redact(As::user(&actor), &row.room_id, &row.event_id, reason).await?;
         }
@@ -361,10 +359,19 @@ fn human_duration(secs: u64) -> String {
     format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
 }
 
+/// Who redacts a bridged event: its ghost sender, who may always redact its own
+/// events (the bot may lack the power in a linked room), else the bot.
+fn redactor(c: &Community, row: &MessageRow) -> String {
+    match PublicKey::from_hex(&row.author) {
+        Ok(pk) if row.origin == "armada" => c.b.ghost_mxid(&pk),
+        _ => c.b.bot_mxid.clone(),
+    }
+}
+
 /// Redact Matrix copies of messages whose Armada timer ran out (CORD-08).
 pub async fn expire(c: &mut Community) -> Result<()> {
     for row in c.b.db.expired_messages(&c.id, now_ms() / 1000, 100).await? {
-        let _ = c.b.mx.redact(As::BOT, &row.room_id, &row.event_id, Some("Disappeared on Armada")).await;
+        let _ = c.b.mx.redact(As::user(&redactor(c, &row)), &row.room_id, &row.event_id, Some("Disappeared on Armada")).await;
         c.b.db.delete_message_event(&row.room_id, &row.event_id).await?;
     }
     Ok(())

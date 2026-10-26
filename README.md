@@ -2,11 +2,24 @@
 
 A Matrix appservice that bridges [Armada](https://armada.buzz) communities to
 Matrix. Armada runs on [Concord](https://github.com/concord-protocol/concord):
-serverless, end-to-end encrypted communities on Nostr. This bridge joins one
-as a member and mirrors it into a Matrix space.
+serverless, end-to-end encrypted communities on Nostr. This bridge joins a
+community as a member and bridges its channels to Matrix rooms, in one of two
+ways:
 
-- **A community becomes a space; each channel becomes a room.** The space
-  follows Armada as channels are created, renamed, reordered and deleted.
+- **Linked rooms (the usual way).** You keep your existing Matrix room and
+  link it to one Armada channel, like most Matrix bridges' "plumbed" rooms.
+  The bot changes none of the room's name, settings or permissions:
+  1. On Armada, invite the bridge's npub to the community.
+  2. Invite `@armadabot:<server>` to the Matrix room and send `!armada link`
+     there (room moderators only). The bot replies with a code.
+  3. In the Armada channel, someone who can manage channels posts
+     `/bridge link <code>`.
+- **A whole community as a space.** Send the bot `bridge <invite link>` in a
+  DM: it builds a Matrix space with a room per channel and keeps it in step
+  with Armada as channels are created, renamed, reordered and deleted.
+
+Either way:
+
 - **Everyone keeps their own identity.**
   - Each Armada member is a separate Matrix user (`@armada_npub1…`), with the
     name and picture from their profile.
@@ -14,10 +27,10 @@ as a member and mirrors it into a Matrix space.
     derived from their MXID, so it's stable without being stored.
   - No messages arrive as "the bridge says X said Y".
 - **Both sides must agree.**
-  - A Matrix user with an invite link starts a bridge (everyone, or only the
-    users the operator allows).
+  - A Matrix user starts a bridge (everyone, or only the users the operator
+    allows).
   - Nothing crosses until someone in the Armada community who can manage
-    channels approves it there.
+    channels approves it there (`/bridge link` or `/bridge approve`).
   - Armada admins can scope or revoke the bridge at any time.
 - **Matrix end-to-end encryption.** Every Armada member speaking in an
   encrypted room has their own cross-signed device.
@@ -51,8 +64,11 @@ else's message only hides it on Matrix.
 Concord communities are end-to-end encrypted. Bridging copies their messages
 onto a Matrix homeserver, so:
 
-- **Approval happens on Armada.** Any Matrix user with an invite link can ask
-  to bridge a community. `bridge <invite>` only joins the community and shows
+- **Approval happens on Armada.** A linked room is bridged only once someone
+  holding **Manage channels** posts its code with `/bridge link` in the
+  channel; codes work once, within 24 hours. A community the bot was invited
+  to but where nothing gets linked stays idle. For whole spaces, a Matrix user
+  with an invite link asks to bridge a community. `bridge <invite>` only joins the community and shows
   an approval code. Nothing is relayed in either direction until a member
   holding **Manage channels** (or the owner) posts `/bridge approve <code>` in
   one of its channels. Requests nobody approves within 7 days are dropped, and
@@ -80,15 +96,32 @@ Post these in any channel of a bridged community.
 
 | Command | Who | Effect |
 |---|---|---|
+| `/bridge link <code>` | Manage channels | Link this channel to the Matrix room the code came from |
+| `/bridge unlink` | Manage channels | Unlink this channel's Matrix room |
 | `/bridge approve <code>` | Manage channels | Start bridging (the code is shown on Matrix) |
 | `/bridge status` | Anyone | Show what is bridged |
 | `/bridge include` | Manage channels | Bridge this channel (required for private channels) |
 | `/bridge exclude` | Manage channels | Stop bridging this channel |
 | `/bridge revoke` | Manage channels | Stop bridging the community |
 
+`approve`, `include` and `exclude` are for whole-space bridges.
+
 ## Matrix commands
 
-Send these in a direct message with the bot. The `!armada` prefix is optional
+In a room you want to link (after inviting the bot):
+
+| Command | Who | Effect |
+|---|---|---|
+| `!armada link` | Room moderators with `bridge` permission | Get a code to post with `/bridge link` in the Armada channel |
+| `!armada unlink` | Room moderators | Stop bridging this room |
+| `!armada status` | Anyone | What this room is linked to |
+
+Moderators are users at or above the room's `state_default` power level
+(usually 50). Kicking the bot also unlinks the room. The bot needs to be able
+to invite (to bring in Armada members), and members at the default level need
+to be able to send messages; `!armada link` says if either is missing.
+
+For whole-space bridges, send these in a direct message with the bot. The `!armada` prefix is optional
 there.
 
 | Command | Who | Effect |

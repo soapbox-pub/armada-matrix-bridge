@@ -80,14 +80,16 @@ pub async fn ensure(b: &Bridge, pk: &PublicKey, relays: &[String]) -> Result<Str
     Ok(mxid)
 }
 
-/// Make sure a bridge-owned user is joined to a room (portals are invite-only,
-/// so the bot invites first).
+/// Make sure a bridge-owned user is joined to a room. Portals are invite-only,
+/// so the bot invites first; a linked room may not let it, but may be public.
 pub async fn ensure_in_room(b: &Bridge, mxid: &str, room: &str) -> Result<()> {
     if b.db.is_room_member(room, mxid).await? {
         return Ok(());
     }
-    b.mx.invite(As::BOT, room, mxid).await?;
-    b.mx.join(mxid, room).await?;
+    let invited = b.mx.invite(As::BOT, room, mxid).await;
+    if let Err(e) = b.mx.join(mxid, room).await {
+        return Err(invited.err().unwrap_or(e));
+    }
     b.db.set_room_member(room, mxid, true).await?;
     Ok(())
 }
@@ -104,7 +106,10 @@ pub async fn remove_from_portals(c: &Community, pk: &PublicKey, reason: &str) {
     let mxid = c.b.ghost_mxid(pk);
     for p in c.portals.values() {
         if c.b.db.is_room_member(&p.room_id, &mxid).await.unwrap_or(false) {
-            let _ = c.b.mx.kick(As::BOT, &p.room_id, &mxid, reason).await;
+            // A linked room may not let the bot kick; the ghost can always leave.
+            if c.b.mx.kick(As::BOT, &p.room_id, &mxid, reason).await.is_err() {
+                let _ = c.b.mx.leave(&mxid, &p.room_id).await;
+            }
             let _ = c.b.db.set_room_member(&p.room_id, &mxid, false).await;
         }
     }

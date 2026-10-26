@@ -11,7 +11,10 @@ use concord::community::Membership;
 
 
 /// Schema migrations, applied in order and recorded in `schema_migrations`.
-const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../migrations/0001_init.sql")),
+    (2, include_str!("../migrations/0002_linked_rooms.sql")),
+];
 
 #[derive(Clone)]
 pub struct Db {
@@ -29,6 +32,7 @@ pub struct CommunityRow {
     pub approved_by: Option<String>,
     pub space_room_id: Option<String>,
     pub management_room: Option<String>,
+    pub mode: String,
 }
 
 #[derive(Clone, Debug)]
@@ -135,11 +139,11 @@ impl Db {
         Ok(self.one(&format!("SELECT {COMMUNITY_COLS} FROM communities WHERE community_id = $1"), &[&id]).await?.as_ref().map(CommunityRow::from))
     }
 
-    pub async fn insert_community(&self, m: &Membership, code: &str, requested_by: &str, management_room: Option<&str>) -> Result<()> {
+    pub async fn insert_community(&self, m: &Membership, mode: &str, code: Option<&str>, requested_by: &str, management_room: Option<&str>) -> Result<()> {
         let sealed = self.keys.seal(&serde_json::to_vec(m)?);
         self.exec(
-            "INSERT INTO communities (community_id, membership, status, approval_code, requested_by, management_room) VALUES ($1, $2, 'pending', $3, $4, $5)",
-            &[&m.community_id, &sealed, &code, &requested_by, &management_room],
+            "INSERT INTO communities (community_id, membership, status, approval_code, requested_by, management_room, mode) VALUES ($1, $2, 'pending', $3, $4, $5, $6)",
+            &[&m.community_id, &sealed, &code, &requested_by, &management_room, &mode],
         )
         .await?;
         Ok(())
@@ -215,6 +219,11 @@ impl Db {
             &[&cid, &channel, &room, &encrypted, &name],
         )
         .await?;
+        Ok(())
+    }
+
+    pub async fn delete_portal(&self, room: &str) -> Result<()> {
+        self.exec("DELETE FROM portals WHERE room_id = $1", &[&room]).await?;
         Ok(())
     }
 
@@ -390,6 +399,10 @@ impl Db {
         Ok(self.one("SELECT 1 FROM room_members WHERE room_id = $1 AND mxid = $2", &[&room, &mxid]).await?.is_some())
     }
 
+    pub async fn room_members(&self, room: &str) -> Result<Vec<String>> {
+        Ok(self.all("SELECT mxid FROM room_members WHERE room_id = $1", &[&room]).await?.iter().map(|r| r.get(0)).collect())
+    }
+
     pub async fn set_room_member(&self, room: &str, mxid: &str, joined: bool) -> Result<()> {
         if joined {
             self.exec("INSERT INTO room_members (room_id, mxid) VALUES ($1, $2) ON CONFLICT DO NOTHING", &[&room, &mxid]).await?;
@@ -421,17 +434,37 @@ impl Db {
         Ok(n > 0)
     }
 
-    pub async fn management_room(&self, room: &str) -> Result<Option<String>> {
-        Ok(self.one("SELECT mxid FROM management_rooms WHERE room_id = $1", &[&room]).await?.map(|r| r.get(0)))
+    /// Who invited the bot to a room, and whether it is a DM.
+    pub async fn management_room(&self, room: &str) -> Result<Option<(String, bool)>> {
+        Ok(self.one("SELECT mxid, direct FROM management_rooms WHERE room_id = $1", &[&room]).await?.map(|r| (r.get(0), r.get(1))))
     }
 
-    pub async fn set_management_room(&self, room: &str, mxid: &str) -> Result<()> {
-        self.exec("INSERT INTO management_rooms (room_id, mxid) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET mxid = $2", &[&room, &mxid]).await?;
+    pub async fn set_management_room(&self, room: &str, mxid: &str, direct: bool) -> Result<()> {
+        self.exec(
+            "INSERT INTO management_rooms (room_id, mxid, direct) VALUES ($1, $2, $3) ON CONFLICT (room_id) DO UPDATE SET mxid = $2, direct = $3",
+            &[&room, &mxid, &direct],
+        )
+        .await?;
         Ok(())
+    }
+
+    // ── Link codes ──────────────────────────────────────────────────────────
+
+    /// A fresh code for `room`, replacing any earlier one.
+    pub async fn new_link_code(&self, code: &str, room: &str, mxid: &str) -> Result<()> {
+        self.exec("DELETE FROM link_codes WHERE room_id = $1 OR created_at < now() - interval '1 day'", &[&room]).await?;
+        self.exec("INSERT INTO link_codes (code, room_id, mxid) VALUES ($1, $2, $3)", &[&code, &room, &mxid]).await?;
+        Ok(())
+    }
+
+    /// Use up a code issued within the last day: (room, who asked for it).
+    pub async fn take_link_code(&self, code: &str) -> Result<Option<(String, String)>> {
+        let row = self.one("DELETE FROM link_codes WHERE code = $1 RETURNING room_id, mxid, created_at > now() - interval '1 day'", &[&code]).await?;
+        Ok(row.filter(|r| r.get::<_, bool>(2)).map(|r| (r.get(0), r.get(1))))
     }
 }
 
-const COMMUNITY_COLS: &str = "community_id, membership, status, approval_code, requested_by, approved_by, space_room_id, management_room";
+const COMMUNITY_COLS: &str = "community_id, membership, status, approval_code, requested_by, approved_by, space_room_id, management_room, mode";
 const MESSAGE_COLS: &str = "room_id, event_id, community_id, channel_id, rumor_id, part, kind, author, origin, thread_root, expires_at";
 const REACTION_COLS: &str = "room_id, event_id, community_id, rumor_id, target_rumor_id, author, key, origin";
 
@@ -446,6 +479,7 @@ impl From<&Row> for CommunityRow {
             approved_by: r.get(5),
             space_room_id: r.get(6),
             management_room: r.get(7),
+            mode: r.get(8),
         }
     }
 }

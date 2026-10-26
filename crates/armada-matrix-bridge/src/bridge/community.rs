@@ -67,6 +67,8 @@ pub enum Command {
     Invite { mxid: String },
     /// Give up on a request nobody approved: leave the community and stop.
     Expire,
+    /// Unlink a linked Matrix room (its moderators asked, or the bot was removed).
+    Unlink { room: String, by: String },
 }
 
 pub enum Msg {
@@ -128,6 +130,9 @@ pub struct Community {
     pub requested_by: String,
     pub approved_by: Option<String>,
     pub management_room: Option<String>,
+    /// Existing Matrix rooms are linked to channels one by one, instead of the
+    /// bot building a space.
+    pub linked: bool,
     pub space: Option<String>,
     pub folded: FoldedControl,
     editions: Vec<Edition>,
@@ -509,6 +514,14 @@ impl Community {
         }
         self.status = Status::Revoked;
         let _ = self.b.db.set_status(&self.id, "revoked", None).await;
+        if self.linked {
+            let channels: Vec<String> = self.portals.keys().cloned().collect();
+            for channel in channels {
+                if let Err(e) = super::portals::unlink(self, &channel, &format!("{why} Messages are no longer bridged.")).await {
+                    tracing::warn!(community = %self.id, error = %e, "could not unlink a room");
+                }
+            }
+        }
         for portal in self.portals.values() {
             self.b.notice(&portal.room_id, &format!("{why} Messages are no longer bridged.")).await;
         }
@@ -528,6 +541,14 @@ impl Community {
             .map(|c| format!("#{}", c.name))
             .collect();
         let mut s = format!("**{}** ({}…) — {}", self.name(), &self.id[..12], self.status.as_str());
+        if self.linked {
+            match self.status {
+                Status::Revoked => {}
+                _ if bridged.is_empty() => s.push_str(&format!(", no channels linked yet. {}", super::commands::LINK_HOWTO)),
+                _ => s.push_str(&format!(", linked to Matrix: {}", bridged.join(", "))),
+            }
+            return s;
+        }
         match self.status {
             Status::Pending => {
                 if let Some(code) = &self.approval_code {
@@ -555,6 +576,7 @@ impl Community {
                 let _ = self.publish(&leave, Plane::Guestbook, &self.m.current_guestbook_stream(), &self.b.bot, WrapOptions::default()).await;
                 format!("Unbridged **{}**.", self.name())
             }
+            Command::Invite { .. } if self.linked => "This community's channels are linked to existing Matrix rooms; invite people to those rooms directly.".into(),
             Command::Invite { mxid } => match &self.space {
                 Some(space) => match super::portals::invite_user(self, space, &mxid).await {
                     Ok(()) => format!("Invited {mxid} to **{}**.", self.name()),
@@ -576,6 +598,18 @@ impl Community {
                 for plane in [PlaneSub::Control, PlaneSub::Guestbook, PlaneSub::Rekey, PlaneSub::Chat, PlaneSub::Live, PlaneSub::Dissolved] {
                     self.b.pool.unsubscribe(&format!("{}:{}", self.id, plane.name()));
                 }
+                String::new()
+            }
+            Command::Unlink { room, by } => {
+                let Some(p) = self.portal_for_room(&room).cloned() else { return "This room isn't linked.".into() };
+                if !self.linked {
+                    return "This room is part of a bridged space, so it can't be unlinked on its own. Use `unbridge` in a DM with me.".into();
+                }
+                let why = format!("{by} unlinked this room from #{} on Armada. Messages are no longer bridged.", p.name);
+                if let Err(e) = super::portals::unlink(self, &p.channel_id, &why).await {
+                    return format!("Couldn't unlink: {e:#}");
+                }
+                let _ = self.post_as_bot(&p.channel_id, &format!("{by} unlinked this channel from Matrix."), None).await;
                 String::new()
             }
         }
@@ -655,6 +689,7 @@ fn new_community(b: Arc<Bridge>, row: &CommunityRow, m: Membership) -> Community
         requested_by: row.requested_by.clone(),
         approved_by: row.approved_by.clone(),
         management_room: row.management_room.clone(),
+        linked: row.mode == "linked",
         space: row.space_room_id.clone(),
         folded: FoldedControl::default(),
         editions: vec![],
@@ -703,11 +738,23 @@ pub async fn spawn(b: Arc<Bridge>, row: CommunityRow, m: Membership, portals: Ve
 pub async fn join(b: Arc<Bridge>, bundle: &concord::invite::InviteBundle, requested_by: &str, management_room: &str) -> Result<String> {
     let m = Membership::from_bundle(bundle, now_ms());
     let code = hex::encode(rand::random::<[u8; 4]>());
-    b.db.insert_community(&m, &code, requested_by, Some(management_room)).await?;
+    b.db.insert_community(&m, "space", Some(&code), requested_by, Some(management_room)).await?;
     let row = b.db.community(&m.community_id).await?.context("community vanished")?;
     let c = new_community(b.clone(), &row, m);
     let attribution = bundle.creator_npub.as_deref().map(|creator| (creator, bundle.label.as_deref().unwrap_or("")));
     c.publish_bot_join(attribution).await.context("publishing the bridge's Join")?;
     spawn(b, row, c.m, vec![]).await;
     Ok(code)
+}
+
+/// Join a community the bot was invited to on Armada, in linked mode: nothing
+/// is bridged until a Matrix room is linked to one of its channels.
+pub async fn join_invited(b: Arc<Bridge>, invite: &DirectInvite) -> Result<()> {
+    let m = Membership::from_bundle(&invite.bundle, now_ms());
+    b.db.insert_community(&m, "linked", None, &invite.inviter, None).await?;
+    let row = b.db.community(&m.community_id).await?.context("community vanished")?;
+    let c = new_community(b.clone(), &row, m);
+    c.publish_bot_join(None).await.context("publishing the bridge's Join")?;
+    spawn(b, row, c.m, vec![]).await;
+    Ok(())
 }
